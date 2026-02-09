@@ -40,6 +40,8 @@ library.compiler.defines += [
     'HAVE_STRING_H',
     'SE_EPISODEONE',
     'COMPILER_GCC',
+    'SOURCE_ENGINE=SE_EPISODEONE'
+    'SMEXT_CONF_METAMOD',
     '_LINUX',
     'LINUX',
     'POSIX',
