@@ -1,39 +1,37 @@
 // ---------------------------------------------------------
-// 【第一区】系统兼容性补丁 (步骤 1)
+// 【第一区】系统兼容性补丁 (必须在最前面)
 // ---------------------------------------------------------
 #include <cstdlib>
 
 // 1. 拦截 Windows 内存函数
-// 这一步必须在 memalloc.h 之前，因为 memalloc.h 的内联函数会用到它们
+// 这一步必须在 memalloc.h 之前
 #undef _aligned_malloc
 #undef _aligned_free
-// Linux 的 aligned_alloc 参数是 (alignment, size)，与 Windows 相反
+// Linux 的 aligned_alloc 参数是 (alignment, size)
 #define _aligned_malloc(size, align) aligned_alloc(align, size)
 #define _aligned_free free
 
 // ⚠️ 注意：绝对不要在这里定义 MemAlloc_AllocAlignedFileLine
-// 否则会破坏 memalloc.h 里的函数声明，导致 IMemAlloc 无法定义！
 
 // ---------------------------------------------------------
-// 【第二区】SDK 基础定义 (步骤 2)
+// 【第二区】SDK 基础定义
 // ---------------------------------------------------------
-// 2. 引入 platform 和 memalloc 以获取 IMemAlloc 类型
 #include <tier0/platform.h>
+
+// 【防御性修复】手动前置声明 IMemAlloc，防止头文件解析顺序问题导致类型未知
+class IMemAlloc;
+
 #include <tier0/memalloc.h>
 
 // 3. 显式声明全局变量
-// 必须在引入 extension.h 之前完成，因为 icvar.h 依赖它
 extern IMemAlloc *g_pMemAlloc;
 
-// 4. 修复 vector.h 可能遇到的符号缺失问题
-// 在引入了 memalloc.h 之后，我们再定义这个宏，把旧名称映射到新名称
-// 这样就不会破坏 memalloc.h 里的声明，又能满足 vector.h 的调用
+// 4. 修复 vector.h 的符号
 #define MemAlloc_AllocAlignedFileLine MemAlloc_AllocAligned
 
 // ---------------------------------------------------------
-// 【第三区】引入扩展核心 (步骤 3)
+// 【第三区】引入扩展核心
 // ---------------------------------------------------------
-// 现在环境已经准备好，可以安全引入 extension.h 了
 #include "extension.h"
 
 // ---------------------------------------------------------
@@ -352,4 +350,65 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    if (!conf->GetOffset("CBasePlayer::m_hGroundEntity", &g_off_
+    if (!conf->GetOffset("CBasePlayer::m_hGroundEntity", &g_off_GroundEntity))
+    {
+         snprintf(error, maxlength, "Missing 'CBasePlayer::m_hGroundEntity' in gamedata.");
+         gameconfs->CloseGameConfigFile(conf);
+         return false;
+    }
+
+    void *pTryPlayerMoveAddr = nullptr;
+    if (!conf->GetMemSig("CGameMovement::TryPlayerMove", &pTryPlayerMoveAddr) || !pTryPlayerMoveAddr)
+    {
+        snprintf(error, maxlength, "Failed to find signature for TryPlayerMove.");
+        gameconfs->CloseGameConfigFile(conf);
+        return false;
+    }
+
+    g_pDetour = new CSimpleDetour(pTryPlayerMoveAddr, (void *)Detour_TryPlayerMove);
+    if (!g_pDetour->Enable())
+    {
+        snprintf(error, maxlength, "Failed to enable detour.");
+        delete g_pDetour;
+        g_pDetour = nullptr;
+        gameconfs->CloseGameConfigFile(conf);
+        return false;
+    }
+
+    void *pCreateInterface = nullptr;
+    if (conf->GetMemSig("CreateInterface", &pCreateInterface) && pCreateInterface)
+    {
+        CreateInterfaceFn factory = (CreateInterfaceFn)pCreateInterface;
+        enginetrace = (IEngineTrace *)factory(INTERFACEVERSION_ENGINETRACE_SERVER, nullptr);
+    }
+
+    if (!enginetrace)
+    {
+        snprintf(error, maxlength, "Could not find interface: %s", INTERFACEVERSION_ENGINETRACE_SERVER);
+        gameconfs->CloseGameConfigFile(conf);
+        return false;
+    }
+
+    gameconfs->CloseGameConfigFile(conf);
+    return true;
+}
+
+void MomSurfFixExt::SDK_OnUnload()
+{
+    if (g_pDetour)
+    {
+        delete g_pDetour;
+        g_pDetour = nullptr;
+    }
+}
+
+void MomSurfFixExt::SDK_OnAllLoaded()
+{
+}
+
+bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
+{
+    return true;
+}
+
+SMEXT_LINK(&g_MomSurfFixExt);
