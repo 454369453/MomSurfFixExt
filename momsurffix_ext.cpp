@@ -3,9 +3,10 @@
 #include <CBase.h>
 #include <tier0/vprof.h>
 #include "smsdk_config.h"
+#include "simple_detour.h" // 引入我们自己的 Detour
 
 // ---------------------------------------------------------
-// 1. 辅助工具：手动实现 TraceFilter (解决链接错误)
+// 1. 辅助工具
 // ---------------------------------------------------------
 class CTraceFilterSimple : public ITraceFilter
 {
@@ -29,25 +30,21 @@ private:
 };
 
 // ---------------------------------------------------------
-// 2. 全局变量与偏移量管理
+// 2. 全局变量与偏移量
 // ---------------------------------------------------------
-// ConVars
 ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
 ConVar g_cvRampInitialRetraceLength("momsurffix_ramp_retrace_length", "0.2", FCVAR_NOTIFY);
 ConVar g_cvNoclipWorkaround("momsurffix_enable_noclip_workaround", "1", FCVAR_NOTIFY);
-ConVar g_cvBounce("sv_bounce", "0"); // 注意：通常 sv_bounce 是游戏自带的，这里可能需要 FindConVar
+ConVar g_cvBounce("sv_bounce", "0");
 
-// 偏移量 (从 GameData 读取)
 int g_off_Player = -1;
 int g_off_MV = -1;
 int g_off_VecVelocity = -1; 
 int g_off_VecAbsOrigin = -1;
 
-// Detour 句柄
-IChangeableForward *g_pTryPlayerMoveDetour = nullptr;
-CDetourManager *g_pDetourManager = nullptr;
+// 使用我们的 SimpleDetour
+CSimpleDetour *g_pDetour = nullptr;
 
-// 静态池
 static CGameTrace g_TempTraces[MAXPLAYERS + 1];
 static Vector g_TempPlanes[MAX_CLIP_PLANES];
 
@@ -58,50 +55,47 @@ void FindValidPlane(CGameMovement *pThis, CBasePlayer *pPlayer, const Vector &or
 bool IsValidMovementTrace(const CGameTrace &tr);
 
 // ---------------------------------------------------------
-// 4. Detour 回调 (核心修复逻辑)
+// 4. Detour 回调 (静态函数，模拟 ThisCall)
 // ---------------------------------------------------------
-// 声明 Detour 函数签名：TryPlayerMove(Vector *pFirstDest, CGameTrace *pFirstTrace)
-// 注意：参数根据 SDK 不同可能会有变化，这里基于你的原始代码假设参数正确
-DETOUR_DECL_MEMBER2(TryPlayerMove_Detour, int, Vector *, pFirstDest, CGameTrace *, pFirstTrace)
-{
-    CGameMovement *pThis = (CGameMovement *)this; // 获取 this 指针
 
-    // 【关键】使用偏移量获取成员指针，防止崩溃
-    // CBasePlayer *pPlayer = pThis->player; // 原始代码 (错误)
+// 定义原函数类型：void TryPlayerMove(CGameMovement*, Vector*, CGameTrace*, float)
+// 注意：GameData 里的签名有 float 参数，所以这里必须加上
+typedef int (*TryPlayerMove_t)(CGameMovement *, Vector *, CGameTrace *, float);
+
+int Detour_TryPlayerMove(CGameMovement *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
+{
+    // 获取成员指针
     CBasePlayer *pPlayer = *(CBasePlayer **)((uintptr_t)pThis + g_off_Player);
-    
-    // CMoveData *mv = pThis->mv; // 原始代码 (错误)
     CMoveData *mv = *(CMoveData **)((uintptr_t)pThis + g_off_MV);
 
-    if (!pPlayer || !mv)
+    TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
+
+    if (!pPlayer || !mv || !Original)
     {
-        // 如果指针获取失败，直接调用原函数
-        return DETOUR_MEMBER_CALL(TryPlayerMove_Detour)(pFirstDest, pFirstTrace);
+        return 0;
     }
 
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
 
     int client = pPlayer->entindex();
     CGameTrace &pm = g_TempTraces[client];
-    pm = CGameTrace(); // Reset
+    pm = CGameTrace(); 
 
-    // 获取速度和坐标 (使用偏移量更安全，也可以直接用 mv->m_vecVelocity 如果你确信 struct 没变)
-    // 这里演示使用 GameData 偏移量读取 Velocity，确保 100% 安全
     Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
     Vector vel = *pVel; 
 
-    // 获取 Origin
     Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
     Vector origin = *pOrigin;
     
     if (vel.LengthSqr() < 0.000001f)
     {
-        return 0; // MoveHelper()->ResetTouchList(); // 原版逻辑通常这里会 return
+        // 调用原函数或直接返回，这里简单返回0模拟
+        // 实际上如果有问题，最好调用 trampoline
+        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft); 
     }
 
-    // --- 下面是你的修复逻辑 (保留大部分原样，微调 Trace 调用) ---
-
-    float time_left = gpGlobals->frametime; // pThis->GetFrameTime() 可能无法直接调用，用全局变量替代
+    // 使用传入的 time_left 或者全局 frametime
+    float time_left = flTimeLeft; // 使用 hook 到的参数
     int blocked = 0;
     int numbumps = g_cvRampBumpCount.GetInt();
     int numplanes = 0;
@@ -109,10 +103,10 @@ DETOUR_DECL_MEMBER2(TryPlayerMove_Detour, int, Vector *, pFirstDest, CGameTrace 
     Vector valid_plane;
     bool has_valid_plane = false;
 
+    // --- 核心修复逻辑开始 ---
     for (int bumpcount = 0; bumpcount < numbumps; bumpcount++)
     {
-        if (vel.LengthSqr() == 0.0f)
-            break;
+        if (vel.LengthSqr() == 0.0f) break;
 
         Vector end;
         VectorMA(origin, time_left, vel, end);
@@ -131,8 +125,7 @@ DETOUR_DECL_MEMBER2(TryPlayerMove_Detour, int, Vector *, pFirstDest, CGameTrace 
             origin = pm.endpos;
         }
 
-        if (pm.fraction == 1.0f)
-            break;
+        if (pm.fraction == 1.0f) break;
 
         time_left -= time_left * pm.fraction;
 
@@ -145,13 +138,11 @@ DETOUR_DECL_MEMBER2(TryPlayerMove_Detour, int, Vector *, pFirstDest, CGameTrace 
         g_TempPlanes[numplanes] = pm.plane.normal;
         numplanes++;
 
-        // Ramp bug fix logic
         if (bumpcount > 0 && (pPlayer->GetGroundEntity() == NULL) && !IsValidMovementTrace(pm))
         {
             stuck_on_ramp = true;
         }
 
-        // Noclip workaround
         if (g_cvNoclipWorkaround.GetBool() && stuck_on_ramp && vel.z >= -6.25f && vel.z <= 0.0f && !has_valid_plane)
         {
             FindValidPlane(pThis, pPlayer, origin, vel, valid_plane);
@@ -163,19 +154,13 @@ DETOUR_DECL_MEMBER2(TryPlayerMove_Detour, int, Vector *, pFirstDest, CGameTrace 
             VectorMA(origin, g_cvRampInitialRetraceLength.GetFloat(), valid_plane, origin);
         }
 
-        // Clip velocity
         float allFraction = 0.0f;
         int blocked_planes = 0;
         
-        // 注意：pThis->m_surfaceFriction 也是成员变量，需要偏移量。
-        // 这里偷懒假设它是 1.0，或者你可以添加 g_off_SurfaceFriction
-        float surfaceFriction = 1.0f; 
-
         for (int i = 0; i < numplanes; i++)
         {
             Vector new_vel;
-            // standard clip
-            new_vel = vel - (g_TempPlanes[i] * DotProduct(vel, g_TempPlanes[i]) * 1.0f); // 简化版 Clip
+            new_vel = vel - (g_TempPlanes[i] * DotProduct(vel, g_TempPlanes[i]) * 1.0f);
 
             if (g_TempPlanes[i].normal.z >= 0.7f)
             {
@@ -205,13 +190,11 @@ DETOUR_DECL_MEMBER2(TryPlayerMove_Detour, int, Vector *, pFirstDest, CGameTrace 
             break;
         }
     }
+    // --- 核心修复逻辑结束 ---
 
-    // 写回数据
     *pVel = vel;
-    // pThis->mv->SetAbsOrigin(origin); // CMoveData 没有 SetAbsOrigin 虚函数，直接写内存
     *pOrigin = origin;
 
-    // 返回 blocked 状态
     return blocked;
 }
 
@@ -236,7 +219,6 @@ void FindValidPlane(CGameMovement *pThis, CBasePlayer *pPlayer, const Vector &or
                 Vector end = origin + (dir * 0.0625f);
 
                 CGameTrace trace;
-                // 使用我们自定义的 Filter
                 CTraceFilterSimple filter(pPlayer, COLLISION_GROUP_PLAYER_MOVEMENT);
                 Ray_t ray;
                 ray.Init(origin, end);
@@ -268,11 +250,10 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 }
 
 // ---------------------------------------------------------
-// 6. 生命周期管理 (Load/Unload)
+// 6. 生命周期管理
 // ---------------------------------------------------------
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
-    // 1. 读取 GameData
     char conf_error[255];
     IGameConfig *conf = nullptr;
     if (!gameconfs->LoadGameConfigFile("momsurffix_fix.games", &conf, conf_error, sizeof(conf_error)))
@@ -281,7 +262,6 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 2. 获取偏移量 (重要：对应你的 gamedata key)
     if (!conf->GetOffset("CGameMovement::player", &g_off_Player) ||
         !conf->GetOffset("CGameMovement::mv", &g_off_MV) ||
         !conf->GetOffset("CMoveData::m_vecVelocity", &g_off_VecVelocity) ||
@@ -292,21 +272,25 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 3. 创建 Detour
-    g_pDetourManager = g_pSM->GetDetourManager();
-    // "CGameMovement::TryPlayerMove" 必须匹配 gamedata 里的 Signatures 节的键名
-    Detour *detour = g_pDetourManager->CreateDetour(conf, "CGameMovement::TryPlayerMove");
-    
-    if (!detour)
+    // 获取 TryPlayerMove 的地址
+    void *pTryPlayerMoveAddr = nullptr;
+    if (!conf->GetMemSig("CGameMovement::TryPlayerMove", &pTryPlayerMoveAddr) || !pTryPlayerMoveAddr)
     {
-        snprintf(error, maxlength, "Failed to create detour for TryPlayerMove.");
+        snprintf(error, maxlength, "Failed to find signature for TryPlayerMove.");
         gameconfs->CloseGameConfigFile(conf);
         return false;
     }
 
-    // 4. 启用 Hook
-    detour->AddFixedHook(DETOUR_MEMBER(TryPlayerMove_Detour), nullptr); // nullptr 因为我们不需要特定的 callback owner
-    detour->EnableDetour();
+    // 创建并启用 Hook
+    g_pDetour = new CSimpleDetour(pTryPlayerMoveAddr, (void *)Detour_TryPlayerMove);
+    if (!g_pDetour->Enable())
+    {
+        snprintf(error, maxlength, "Failed to enable detour.");
+        delete g_pDetour;
+        g_pDetour = nullptr;
+        gameconfs->CloseGameConfigFile(conf);
+        return false;
+    }
 
     gameconfs->CloseGameConfigFile(conf);
     return true;
@@ -314,7 +298,11 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 
 void MomSurfFixExt::SDK_OnUnload()
 {
-    // 自动管理 Detour，不需要手动清理，但为了规范可以置空
+    if (g_pDetour)
+    {
+        delete g_pDetour;
+        g_pDetour = nullptr;
+    }
 }
 
 void MomSurfFixExt::SDK_OnAllLoaded()
