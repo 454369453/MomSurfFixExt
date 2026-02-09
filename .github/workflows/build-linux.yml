@@ -1,49 +1,71 @@
-name: Build MomSurfFix Extension on Linux
+name: Build CS:GO Extension
 
 on:
   push:
-    branches: [ main ]
+    branches: ["master", "main", "gammacase"] # 确保包含你现在的分支
   pull_request:
-    branches: [ main ]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    name: Compile Extension
+    # 🌟 强烈建议用 20.04 避免 GCC 版本过高导致的 SDK 报错
+    runs-on: ubuntu-20.04
+    
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          path: extension
+          # 🌟 如果你的 SDK 是作为 git submodule 添加的，必须递归拉取
+          submodules: recursive 
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y git clang g++-multilib python3 python3-pip lib32stdc++-10-dev lib32z1-dev libc6-dev-i386
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-    - name: Clone and Install AMBuild
-      run: |
-        git clone https://github.com/alliedmodders/ambuild
-        cd ambuild
-        python3 setup.py install --user
-        cd ..
+      - name: Install AMBuild
+        run: pip install git+https://github.com/alliedmodders/ambuild
 
-    - name: Clone SDKs
-      run: |
-        git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod || (sleep 5; git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod)
-        cd sourcemod && git submodule update --init --recursive && cd ..
-        git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource || (sleep 5; git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource)
-        cd mmsource && git submodule update --init --recursive && cd ..
-        git clone --recursive https://github.com/alliedmodders/hl2sdk -b sdk2013 hl2sdk-csgo || (sleep 5; git clone --recursive https://github.com/alliedmodders/hl2sdk -b sdk2013 hl2sdk-csgo)
-        cd hl2sdk-csgo && git submodule update --init --recursive && cd ..
+      # 🌟【关键步骤】安装 32 位编译环境，否则 100% 失败
+      - name: Install Linux 32-bit Dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-multilib g++-multilib \
+            libstdc++6:i386 \
+            libc6-dev-i386 \
+            clang
 
-    - name: Configure and Build
-      run: |
-        mkdir build && cd build
-        export PATH=$HOME/.local/bin:$PATH
-        python3 ../configure.py --sm-path=/home/runner/work/MomSurfFixExt/MomSurfFixExt/sourcemod --mms-path=/home/runner/work/MomSurfFixExt/MomSurfFixExt/mmsource --hl2sdk-path=/home/runner/work/MomSurfFixExt/MomSurfFixExt/hl2sdk-csgo --sdks=csgo --targets=x86
-        ambuild
+      # 🌟【保险步骤】手动拉取 SDK (防止你的 submodule 配置有误)
+      # 如果你确定你的仓库里 submodule 没问题，这步可以删掉
+      - name: Manual Checkout SDKs
+        run: |
+          mkdir sdks
+          cd sdks
+          git clone https://github.com/alliedmodders/sourcemod --recursive --branch master sourcemod
+          git clone https://github.com/alliedmodders/mmsource --recursive --branch master mmsource
+          git clone https://github.com/alliedmodders/hl2sdk-csgo --recursive --branch master hl2sdk-csgo
 
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: momsurffix_ext-so
-        path: build/package/addons/sourcemod/extensions/momsurffix_ext.ext.so
+      - name: Compile
+        run: |
+          mkdir build
+          cd build
+          # 🌟 这里假设你用的是 AMBuild (configure.py)
+          # 我们显式指定 SDK 路径，确保万无一失
+          python3 ../extension/configure.py \
+            --enable-optimize \
+            --sdks=csgo \
+            --targets=x86 \
+            --sm-path=${{ github.workspace }}/sdks/sourcemod \
+            --mms-path=${{ github.workspace }}/sdks/mmsource \
+            --hl2sdk-root=${{ github.workspace }}/sdks
+          
+          ambuild
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: csgo-extension-linux
+          path: build/package/*.so
