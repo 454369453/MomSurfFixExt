@@ -281,7 +281,10 @@
 		{
 			//EngineTrace interface name
 			"CEngineTrace"	"EngineTraceServer004"
-			
+
+			// 【新增】我们需要这个来判断玩家是否在地面
+       		"CBasePlayer::m_hGroundEntity"      "332"
+
 			//CMoveData		
 			"CMoveData::m_vecVelocity"			"64"
 			//...
