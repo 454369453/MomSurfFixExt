@@ -1,38 +1,50 @@
 // ============================================================================
-// 【第一区】系统兼容性补丁 (必须在最前面)
+// 【第一区】环境强行修正 (必须放在最前面)
 // ============================================================================
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
 
-// 1. 拦截 Windows 内存函数
+// 1. 暴力拦截 Windows 内存函数
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) aligned_alloc(align, size)
 #define _aligned_free free
 #define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
 
-// 2. 强制定义 abstract_class，防止 SDK 头文件解析失败
+// 2. 【核弹修复】手动定义 SDK 缺失的关键宏
+// CS:GO SDK 在新版 Linux 编译器下经常漏定义这些，导致类定义失效
 #ifndef abstract_class
     #define abstract_class class
 #endif
+#ifndef PLATFORM_INTERFACE
+    #define PLATFORM_INTERFACE extern "C"
+#endif
+#ifndef OVERRIDE
+    #define OVERRIDE override
+#endif
 
 // ============================================================================
-// 【第二区】SDK 核心前置定义
+// 【第二区】SDK 核心欺骗
 // ============================================================================
+// 1. 引入 platform.h
 #include <tier0/platform.h>
-#include <tier0/memalloc.h>
 
-// 【关键修复】手动前置声明 IMemAlloc
-// 就算 memalloc.h 解析有问题，这行代码也能保证 g_pMemAlloc 的声明不报错
+// 2. 【关键】手动前置声明 IMemAlloc
+// 无论 memalloc.h 是否解析成功，这行代码保证 g_pMemAlloc 的类型是合法的
 class IMemAlloc;
 
-// 显式声明全局内存分配器变量
+// 3. 尝试引入 memalloc.h
+#include <tier0/memalloc.h>
+
+// 4. 显式声明全局内存分配器
+// 此时编译器已经知道 IMemAlloc 是个类（哪怕是空的），所以这行绝对不会报错
 extern IMemAlloc *g_pMemAlloc;
 
 // ============================================================================
 // 【第三区】SourceMod 扩展入口
 // ============================================================================
+// 现在环境已经“伪造”完毕，可以安全引入 extension.h
 #include "extension.h"
 
 // ============================================================================
@@ -40,16 +52,18 @@ extern IMemAlloc *g_pMemAlloc;
 // ============================================================================
 #include <ihandleentity.h>
 
-// 定义假类以欺骗 SDK 头文件
+// 定义假类以欺骗 SDK 头文件，解决 CBasePlayer 未知类型报错
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
+// 手动定义枚举，解决 forward declaration 报错
 enum PLAYER_ANIM { 
     PLAYER_IDLE, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1 
 };
 
+// 引入业务接口
 #include <engine/IEngineTrace.h>
-#include <ispatialpartition.h> 
+#include <ispatialpartition.h> // ITraceFilter 定义在此
 #include <igamemovement.h>
 #include <tier0/vprof.h>
 
@@ -187,6 +201,7 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 // ============================================================================
 // Detour 函数
 // ============================================================================
+// 使用 void* 避免类型依赖问题
 typedef int (*TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
@@ -329,7 +344,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 }
 
 // ============================================================================
-// 生命周期
+// 扩展加载/卸载
 // ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
@@ -376,6 +391,7 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
+    // 获取 Trace 接口
     void *pCreateInterface = nullptr;
     if (conf->GetMemSig("CreateInterface", &pCreateInterface) && pCreateInterface)
     {
