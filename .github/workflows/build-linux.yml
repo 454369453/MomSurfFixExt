@@ -18,22 +18,32 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y git clang g++-multilib python3 python3-pip lib32stdc++-10-dev lib32z1-dev libc6-dev-i386
-        pip install ambuild
+
+    - name: Clone and Install AMBuild
+      run: |
+        git clone https://github.com/alliedmodders/ambuild
+        cd ambuild
+        python3 setup.py install --user
+        cd ..
 
     - name: Clone SDKs
       run: |
         git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-stable sourcemod
         git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-stable mmsource
-        git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo  # 替换为 hl2sdk-css 如果是 CS:S
+        git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo  # 如为 CS:S，替换为 hl2sdk-css
 
     - name: Configure and Build
       run: |
         mkdir build && cd build
-        python3 ../AMBuildScript.py --sdks=csgo --mms-path=../mmsource --sm-path=../sourcemod --targets=x86
+        export PATH=$HOME/.local/bin:$PATH  # 确保 ambuild 可执行
+        export HL2SDK=/home/runner/work/MomSurfFixExt/MomSurfFixExt/hl2sdk-csgo
+        export MMSOURCE=/home/runner/work/MomSurfFixExt/MomSurfFixExt/mmsource
+        export SOURCEMOD=/home/runner/work/MomSurfFixExt/MomSurfFixExt/sourcemod
+        python3 ../configure.py --sdks=csgo --targets=x86
         ambuild
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: momsurffix_ext-so
-        path: build/package/addons/sourcemod/extensions/momsurffix_ext.ext.so
+        path: build/package/addons/sourcemod/extensions/momsurffix_ext.ext.so  # 输出路径可能需根据日志调整为 build/momsurffix_ext.ext.so
