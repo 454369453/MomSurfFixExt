@@ -1,8 +1,10 @@
 // ---------------------------------------------------------
-// 【第一区】暴力兼容补丁 (必须最先定义)
+// 【第一区】系统兼容性补丁 (必须在最前面)
 // ---------------------------------------------------------
 #include <cstdlib>
 
+// 强制拦截 Windows 内存函数
+// 这一步必须在任何 SDK 头文件之前完成
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) aligned_alloc(align, size)
@@ -10,33 +12,41 @@
 #define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
 
 // ---------------------------------------------------------
-// 【第二区】核心头文件
+// 【第二区】解决依赖死锁 (关键步骤)
 // ---------------------------------------------------------
-#include "extension.h"
-
-// 显式引入 SDK 的 platform.h，确保 PLATFORM_INTERFACE 被定义
+// 1. 先引入 platform.h 确保 PLATFORM_INTERFACE 宏可用
 #include <tier0/platform.h>
+
+// 2. 引入 memalloc.h 以获取 IMemAlloc 类型定义
 #include <tier0/memalloc.h>
 
-// 声明全局内存分配器
+// 3. 显式声明全局变量 g_pMemAlloc
+// 这样稍后 extension.h 里的 icvar.h 就能找到它，不会报错了
 extern IMemAlloc *g_pMemAlloc;
 
 // ---------------------------------------------------------
-// 【第三区】SDK 接口
+// 【第三区】引入扩展核心
+// ---------------------------------------------------------
+// 现在可以安全地引入 extension.h 了
+#include "extension.h"
+
+// ---------------------------------------------------------
+// 【第四区】其他 SDK 接口
 // ---------------------------------------------------------
 #include <ihandleentity.h>
-// 假类定义，解决 SDK 头文件中的未知类型引用
+
+// 定义假类以欺骗 SDK 头文件 (解决 CBasePlayer 未知类型报错)
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
-// 手动定义枚举
+// 解决 enum 前置声明报错
 enum PLAYER_ANIM { 
     PLAYER_IDLE, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1 
 };
 
 // 引入其他 SDK 头文件
 #include <engine/IEngineTrace.h>
-#include <ispatialpartition.h>
+#include <ispatialpartition.h> // ITraceFilter 定义在此
 #include <igamemovement.h>
 #include <tier0/vprof.h>
 
@@ -174,12 +184,10 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 // ---------------------------------------------------------
 // Detour 回调
 // ---------------------------------------------------------
-// 使用 void* 替代 CGameMovement* 避免 incomplete type 错误
 typedef int (*TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
 {
-    // 指针运算需要 uintptr_t
     void *pPlayer = *(void **)((uintptr_t)pThis + g_off_Player);
     CMoveData *mv = *(CMoveData **)((uintptr_t)pThis + g_off_MV);
 
@@ -365,8 +373,7 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 手动查找 CreateInterface 接口
-    // 因为是扩展，我们直接从 gamedata 里找 CreateInterface 的地址，然后调用它
+    // 获取 CreateInterface (手动工厂模式)
     void *pCreateInterface = nullptr;
     if (conf->GetMemSig("CreateInterface", &pCreateInterface) && pCreateInterface)
     {
