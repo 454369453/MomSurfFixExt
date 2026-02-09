@@ -33,7 +33,8 @@ jobs:
         git submodule update --init --recursive
         cd ..
         git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource
-        git clone --recursive https://github.com/alliedmodders/hl2sdk -b sdk2013 hl2sdk-csgo
+        # 【关键修改】这里必须是 -b csgo，绝对不能是 sdk2013
+        git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
 
     - name: Configure and Build
       run: |
