@@ -4,8 +4,8 @@
 #define SMEXT_CONF_NAME         "MomSurfFix Extension"
 #define SMEXT_CONF_DESCRIPTION  "Ports Momentum Mod surf/ramp glitch fix to CS:GO/CSS"
 #define SMEXT_CONF_VERSION      "1.0.0"
-#define SMEXT_CONF_AUTHOR       "Your Name or GAMMACASE (original)"
-#define SMEXT_CONF_URL          "https://github.com/YourUsername/MomSurfFixExt"
+#define SMEXT_CONF_AUTHOR       "GAMMACASE (original)"
+#define SMEXT_CONF_URL          "https://github.com/454369453/MomSurfFixExt"
 #define SMEXT_CONF_LOGTAG       "MOMSURFFIX"
 #define SMEXT_CONF_LICENSE      "GPL"
 #define SMEXT_CONF_DATESTRING   __DATE__
@@ -29,8 +29,6 @@
 #define SMEXT_ENABLE_TRANSLATOR
 #define SMEXT_ENABLE_ROOTCONSOLEMENU
 
-#define SOURCE_ENGINE SE_EPISODEONE
-#define SMEXT_CONF_METAMOD
-#define SMEXT_LINK extern "C" __attribute__((visibility("default")))
+#define SMEXT_CONF_METAMOD  // 启用 Metamod 支持
 
 #endif
