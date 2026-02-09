@@ -1,38 +1,43 @@
 # AMBuildScript - 定义构建逻辑
 
-cxx = builder.DetectCxx()
+import os
 
-# 创建共享库目标（SourceMod扩展为动态库）
-library = cxx.Library("momsurffix_ext")
+# 检测C++编译器，使用注入的目标架构
+cxx = builder.DetectCxx(target_arch=builder.options.targets)
 
-# 添加源文件（调整为您的文件列表）
+# 创建动态库目标
+library = cxx.Library(builder, 'momsurffix_ext.ext')
+
+# 添加源文件
 library.sources += [
     'momsurffix_ext.cpp',
-    'extension.h',  # 如果作为源文件编译
-    'smsdk_config.h',
 ]
 
-# 添加SourceMod/HL2SDK/MMS特定包括路径（Actions中动态设置）
+# 添加包括路径，使用注入的选项
 library.compiler.includes += [
     os.path.join(builder.options.sm_path, 'public'),
     os.path.join(builder.options.sm_path, 'public/extensions'),
     os.path.join(builder.options.sm_path, 'public/sourcepawn'),
-    os.path.join(builder.options.hl2sdk_path, 'public'),
-    os.path.join(builder.options.hl2sdk_path, 'public/tier0'),
-    os.path.join(builder.options.hl2sdk_path, 'public/tier1'),
+    os.path.join(builder.options.sm_path, 'sourcepawn/include'),
     os.path.join(builder.options.mms_path, 'core'),
     os.path.join(builder.options.mms_path, 'core/sourcehook'),
+    os.path.join(builder.options.hl2sdk_path, 'public'),
+    os.path.join(builder.options.hl2sdk_path, 'public/engine'),
+    os.path.join(builder.options.hl2sdk_path, 'public/mathlib'),
+    os.path.join(builder.options.hl2sdk_path, 'public/vstdlib'),
+    os.path.join(builder.options.hl2sdk_path, 'public/tier0'),
+    os.path.join(builder.options.hl2sdk_path, 'public/tier1'),
+]
+
+# 添加链接标志和库（针对Linux 32位）
+library.compiler.linkflags += ['-m32']
+library.compiler.postlink += [
+    os.path.join(builder.options.hl2sdk_path, 'lib/linux/tier1_i486.a'),
+    os.path.join(builder.options.hl2sdk_path, 'lib/linux/mathlib_i486.a'),
 ]
 
 # 添加预处理器定义
-library.compiler.defines += [
-    'SOURCEMOD_BUILD',
-    'HAVE_STRING_H',
-    '_LINUX',  # Linux平台
-]
+library.compiler.defines += ['SOURCEMOD_BUILD', 'HAVE_STRING_H']
 
-# 添加链接标志（动态库输出）
-library.compiler.postlink += ['-shared']
-
-# 将库添加到构建图
+# 添加到构建图
 builder.Add(library)
