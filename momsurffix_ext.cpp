@@ -1,52 +1,55 @@
 // ---------------------------------------------------------
-// 【第一区】系统兼容性补丁 (必须在最前面)
+// 【第一区】系统兼容性补丁 (步骤 1)
 // ---------------------------------------------------------
 #include <cstdlib>
 
-// 强制拦截 Windows 内存函数
-// 这一步必须在任何 SDK 头文件之前完成
+// 1. 拦截 Windows 内存函数
+// 这一步必须在 memalloc.h 之前，因为 memalloc.h 的内联函数会用到它们
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) aligned_alloc(align, size)
 #define _aligned_free free
-#define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
+
+// ⚠️ 注意：绝对不要在这里定义 MemAlloc_AllocAlignedFileLine
+// 否则会破坏 memalloc.h 里的函数声明
 
 // ---------------------------------------------------------
-// 【第二区】解决依赖死锁 (关键步骤)
+// 【第二区】SDK 基础定义 (步骤 2)
 // ---------------------------------------------------------
-// 1. 先引入 platform.h 确保 PLATFORM_INTERFACE 宏可用
+// 2. 引入 platform 和 memalloc 以获取 IMemAlloc 类型
 #include <tier0/platform.h>
-
-// 2. 引入 memalloc.h 以获取 IMemAlloc 类型定义
 #include <tier0/memalloc.h>
 
-// 3. 显式声明全局变量 g_pMemAlloc
-// 这样稍后 extension.h 里的 icvar.h 就能找到它，不会报错了
+// 3. 显式声明全局变量
+// 必须在引入 extension.h 之前完成，因为 icvar.h 依赖它
 extern IMemAlloc *g_pMemAlloc;
 
+// 4. 修复 vector.h 可能遇到的符号缺失问题
+// 在引入了 memalloc.h 之后，我们再定义这个宏，把旧名称映射到新名称
+// 这样就不会破坏 memalloc.h 里的声明，又能满足 vector.h 的调用
+#define MemAlloc_AllocAlignedFileLine MemAlloc_AllocAligned
+
 // ---------------------------------------------------------
-// 【第三区】引入扩展核心
+// 【第三区】引入扩展核心 (步骤 3)
 // ---------------------------------------------------------
-// 现在可以安全地引入 extension.h 了
+// 现在环境已经准备好，可以安全引入 extension.h 了
 #include "extension.h"
 
 // ---------------------------------------------------------
-// 【第四区】其他 SDK 接口
+// 【第四区】其他 SDK 接口与逻辑
 // ---------------------------------------------------------
 #include <ihandleentity.h>
 
-// 定义假类以欺骗 SDK 头文件 (解决 CBasePlayer 未知类型报错)
+// 假类定义
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
-// 解决 enum 前置声明报错
 enum PLAYER_ANIM { 
     PLAYER_IDLE, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1 
 };
 
-// 引入其他 SDK 头文件
 #include <engine/IEngineTrace.h>
-#include <ispatialpartition.h> // ITraceFilter 定义在此
+#include <ispatialpartition.h>
 #include <igamemovement.h>
 #include <tier0/vprof.h>
 
@@ -54,7 +57,7 @@ enum PLAYER_ANIM {
 #include "simple_detour.h"
 
 // ---------------------------------------------------------
-// 常量与全局变量
+// 全局变量与常量
 // ---------------------------------------------------------
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
@@ -63,13 +66,10 @@ enum PLAYER_ANIM {
 #define MAX_CLIP_PLANES 5
 #endif
 
-// 扩展实例
 MomSurfFixExt g_MomSurfFixExt;
-
-// 接口指针
 IEngineTrace *enginetrace = nullptr;
 
-// 工厂函数定义
+// CreateInterface 定义
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
 ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
@@ -373,7 +373,6 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 获取 CreateInterface (手动工厂模式)
     void *pCreateInterface = nullptr;
     if (conf->GetMemSig("CreateInterface", &pCreateInterface) && pCreateInterface)
     {
