@@ -1,19 +1,22 @@
 // ============================================================================
-// 【第一区】环境强行修正 (必须放在最前面)
+// 【第一区】环境强力补丁 (必须放在最前面)
 // ============================================================================
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
 
-// 1. 暴力拦截 Windows 内存函数
+// 1. 解决 Windows/Linux 内存函数差异
+// _aligned_malloc 必须在 SDK 头文件之前定义，因为 SDK 内部的内联函数会用到它
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) aligned_alloc(align, size)
 #define _aligned_free free
-#define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
 
-// 2. 【核弹修复】手动定义 SDK 缺失的关键宏
-// CS:GO SDK 在新版 Linux 编译器下经常漏定义这些，导致类定义失效
+// ⚠️ 修正点：移除了这里的 MemAlloc_AllocAlignedFileLine 定义
+// 把它移到了后面，防止破坏 SDK 头文件原本的声明
+
+// 2. 解决 SDK 旧语法兼容性 (关键修复！)
+// CS:GO SDK 在新版 Linux 编译器下经常漏定义 abstract_class
 #ifndef abstract_class
     #define abstract_class class
 #endif
@@ -25,26 +28,29 @@
 #endif
 
 // ============================================================================
-// 【第二区】SDK 核心欺骗
+// 【第二区】SDK 核心类型预处理
 // ============================================================================
 // 1. 引入 platform.h
 #include <tier0/platform.h>
 
-// 2. 【关键】手动前置声明 IMemAlloc
-// 无论 memalloc.h 是否解析成功，这行代码保证 g_pMemAlloc 的类型是合法的
+// 2. 手动前置声明 IMemAlloc (双重保险)
 class IMemAlloc;
 
-// 3. 尝试引入 memalloc.h
+// 3. 引入 memalloc.h
+// 此时 MemAlloc_AllocAlignedFileLine 宏还没定义，所以这里的声明能正常通过
 #include <tier0/memalloc.h>
 
 // 4. 显式声明全局内存分配器
-// 此时编译器已经知道 IMemAlloc 是个类（哪怕是空的），所以这行绝对不会报错
 extern IMemAlloc *g_pMemAlloc;
+
+// 5. 【关键修正】现在可以安全地定义这个宏了
+// 这样既不会破坏上面的头文件，又能让后续 extension.h 里的 vector.h 正常工作
+#define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
 
 // ============================================================================
 // 【第三区】SourceMod 扩展入口
 // ============================================================================
-// 现在环境已经“伪造”完毕，可以安全引入 extension.h
+// 环境完美就绪，安全引入扩展头文件
 #include "extension.h"
 
 // ============================================================================
@@ -52,18 +58,18 @@ extern IMemAlloc *g_pMemAlloc;
 // ============================================================================
 #include <ihandleentity.h>
 
-// 定义假类以欺骗 SDK 头文件，解决 CBasePlayer 未知类型报错
+// 欺骗编译器的假类定义
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
-// 手动定义枚举，解决 forward declaration 报错
+// 手动定义枚举
 enum PLAYER_ANIM { 
     PLAYER_IDLE, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1 
 };
 
 // 引入业务接口
 #include <engine/IEngineTrace.h>
-#include <ispatialpartition.h> // ITraceFilter 定义在此
+#include <ispatialpartition.h>
 #include <igamemovement.h>
 #include <tier0/vprof.h>
 
@@ -71,7 +77,7 @@ enum PLAYER_ANIM {
 #include "simple_detour.h"
 
 // ============================================================================
-// 全局变量与常量
+// 全局变量
 // ============================================================================
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
@@ -86,7 +92,7 @@ MomSurfFixExt g_MomSurfFixExt;
 // 接口指针
 IEngineTrace *enginetrace = nullptr;
 
-// 工厂函数类型定义
+// 工厂函数类型
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
 ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
