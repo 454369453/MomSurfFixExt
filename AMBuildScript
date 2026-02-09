@@ -15,22 +15,19 @@ sm_path = builder.options.sm_path
 mms_path = builder.options.mms_path
 hl2sdk_path = builder.options.hl2sdk_path
 
-# 5. 添加头文件包含路径 (包含之前的修复)
+# 5. 添加头文件包含路径
 library.compiler.includes += [
     builder.sourcePath,
     os.path.join(sm_path, 'public'),
     os.path.join(sm_path, 'public/extensions'),
     os.path.join(sm_path, 'public/sourcepawn'),
     os.path.join(sm_path, 'sourcepawn/include'),
-    # 确保能找到 amtl
     os.path.join(sm_path, 'public/amtl'),
     os.path.join(sm_path, 'public/amtl/amtl'),
     os.path.join(sm_path, 'third_party/amtl'),
     os.path.join(sm_path, 'third_party/amtl/amtl'),
-    # Metamod & SourceHook
     os.path.join(mms_path, 'core'),
     os.path.join(mms_path, 'core/sourcehook'),
-    # HL2SDK
     os.path.join(hl2sdk_path, 'public'),
     os.path.join(hl2sdk_path, 'public/engine'),
     os.path.join(hl2sdk_path, 'public/mathlib'),
@@ -39,36 +36,38 @@ library.compiler.includes += [
     os.path.join(hl2sdk_path, 'public/tier1'),
 ]
 
-# 6. 【关键修复】添加平台宏定义
-# 之前缺少 _LINUX 和 POSIX 导致 platform.h 报错
+# 6. 【关键修复】宏定义
+# 修复了平台检测错误和 wchar_t 错误
 library.compiler.defines += [
     'SOURCEMOD_BUILD',
     'HAVE_STRING_H',
     'SE_EPISODEONE',
     'COMPILER_GCC',
-    '_LINUX',       # 必填：告诉 SDK 这是 Linux
-    'POSIX',        # 必填：告诉 SDK 遵循 POSIX 标准
-    '_NATIVE_WCHAR_T_DEFINED', # 预防措施：防止 SDK 尝试重定义 wchar_t
+    '_LINUX',
+    'LINUX',        # 补充：某些 SDK 版本检测这个
+    'POSIX',
+    '_POSIX',       # 补充
+    '_NATIVE_WCHAR_T_DEFINED', # 防止 SDK 重定义 wchar_t
 ]
 
-# 7. 添加编译器标志
-# 禁用线程安全静态变量（HL2SDK 需要），隐藏符号
+# 7. 【关键修复】提升 C++ 标准
+# 必须使用 c++17 或 c++14 以支持 std::make_unique
 library.compiler.cxxflags += [
-    '-std=c++11',
+    '-std=c++17', 
     '-fno-threadsafe-statics',
     '-fvisibility=hidden',
-    '-Wno-deprecated-declarations', # 减少老旧 SDK 的警告噪音
+    '-Wno-deprecated-declarations',
+    '-Wno-macro-redefined', # 忽略重复宏定义的警告
 ]
 
 # 8. 链接标志 (Linux 32位)
 library.compiler.linkflags += ['-m32', '-lm', '-ldl']
 
 # 9. 链接静态库
-# 注意：csgo sdk 的静态库文件名可能带 _i486 后缀
 library.compiler.postlink += [
     os.path.join(hl2sdk_path, 'lib/linux/tier1_i486.a'),
     os.path.join(hl2sdk_path, 'lib/linux/mathlib_i486.a'),
-    os.path.join(hl2sdk_path, 'lib/linux/interfaces_i486.a'), # 通常需要 interfaces
+    os.path.join(hl2sdk_path, 'lib/linux/interfaces_i486.a'),
 ]
 
 # 10. 注册构建目标
