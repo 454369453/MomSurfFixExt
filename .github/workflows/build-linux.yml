@@ -26,7 +26,7 @@ jobs:
         python3 setup.py install --user
         cd ..
 
-- name: Clone SDKs
+    - name: Clone SDKs
       run: |
         git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod
         cd sourcemod
