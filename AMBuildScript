@@ -1,30 +1,36 @@
 # AMBuildScript
 import os
 
+# 1. 检测编译器
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
+
+# 2. 创建库文件目标
 library = cxx.Library('momsurffix_ext.ext')
 
+# 3. 添加源文件
 library.sources += [ 'momsurffix_ext.cpp' ]
 
-# 定义常见的 include 路径
+# 4. 获取路径变量
 sm_path = builder.options.sm_path
 mms_path = builder.options.mms_path
 hl2sdk_path = builder.options.hl2sdk_path
 
+# 5. 添加头文件包含路径 (包含之前的修复)
 library.compiler.includes += [
     builder.sourcePath,
     os.path.join(sm_path, 'public'),
     os.path.join(sm_path, 'public/extensions'),
     os.path.join(sm_path, 'public/sourcepawn'),
     os.path.join(sm_path, 'sourcepawn/include'),
-    # --- 修复核心 ---
-    os.path.join(sm_path, 'public/amtl'),          # 标准路径
-    os.path.join(sm_path, 'public/amtl/amtl'),     # 嵌套路径 (修复你的报错)
-    os.path.join(sm_path, 'third_party/amtl'),     # 备用路径 (新版结构)
-    os.path.join(sm_path, 'third_party/amtl/amtl'),# 备用嵌套
-    # ----------------
+    # 确保能找到 amtl
+    os.path.join(sm_path, 'public/amtl'),
+    os.path.join(sm_path, 'public/amtl/amtl'),
+    os.path.join(sm_path, 'third_party/amtl'),
+    os.path.join(sm_path, 'third_party/amtl/amtl'),
+    # Metamod & SourceHook
     os.path.join(mms_path, 'core'),
     os.path.join(mms_path, 'core/sourcehook'),
+    # HL2SDK
     os.path.join(hl2sdk_path, 'public'),
     os.path.join(hl2sdk_path, 'public/engine'),
     os.path.join(hl2sdk_path, 'public/mathlib'),
@@ -33,16 +39,37 @@ library.compiler.includes += [
     os.path.join(hl2sdk_path, 'public/tier1'),
 ]
 
-library.compiler.linkflags += ['-m32']
+# 6. 【关键修复】添加平台宏定义
+# 之前缺少 _LINUX 和 POSIX 导致 platform.h 报错
+library.compiler.defines += [
+    'SOURCEMOD_BUILD',
+    'HAVE_STRING_H',
+    'SE_EPISODEONE',
+    'COMPILER_GCC',
+    '_LINUX',       # 必填：告诉 SDK 这是 Linux
+    'POSIX',        # 必填：告诉 SDK 遵循 POSIX 标准
+    '_NATIVE_WCHAR_T_DEFINED', # 预防措施：防止 SDK 尝试重定义 wchar_t
+]
 
-# 链接静态库
+# 7. 添加编译器标志
+# 禁用线程安全静态变量（HL2SDK 需要），隐藏符号
+library.compiler.cxxflags += [
+    '-std=c++11',
+    '-fno-threadsafe-statics',
+    '-fvisibility=hidden',
+    '-Wno-deprecated-declarations', # 减少老旧 SDK 的警告噪音
+]
+
+# 8. 链接标志 (Linux 32位)
+library.compiler.linkflags += ['-m32', '-lm', '-ldl']
+
+# 9. 链接静态库
+# 注意：csgo sdk 的静态库文件名可能带 _i486 后缀
 library.compiler.postlink += [
     os.path.join(hl2sdk_path, 'lib/linux/tier1_i486.a'),
     os.path.join(hl2sdk_path, 'lib/linux/mathlib_i486.a'),
-    # os.path.join(hl2sdk_path, 'lib/linux/interfaces_i486.a'), # 如果报错 undefined reference 再解开
+    os.path.join(hl2sdk_path, 'lib/linux/interfaces_i486.a'), # 通常需要 interfaces
 ]
 
-# 定义宏
-library.compiler.defines += ['SOURCEMOD_BUILD', 'HAVE_STRING_H', 'SE_EPISODEONE', 'COMPILER_GCC']
-
+# 10. 注册构建目标
 builder.Add(library)
