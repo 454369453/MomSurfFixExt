@@ -1,43 +1,48 @@
 // ============================================================================
-// 第一步：系统级补丁 (必须最先出现)
+// 【第一区】系统兼容性补丁 (必须放在最最最前面)
 // ============================================================================
 #include <cstdlib>
+#include <cstring>
+#include <cstdint>
 
-// 拦截 Windows 内存函数，映射到 Linux 标准函数
+// 1. 拦截并替换 Windows 专用内存函数
+// 这一步必须在引入任何 SDK 头文件之前完成
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) aligned_alloc(align, size)
 #define _aligned_free free
+// 修复 vector.h 可能用到的函数映射
+#define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
+
+// 2. 解决 SDK 旧语法兼容性 (重要！)
+// 如果不定义这个，platform.h 在 Linux 下可能无法正确定义 abstract_class
+#ifndef abstract_class
+    #define abstract_class class
+#endif
 
 // ============================================================================
-// 第二步：SDK 核心定义 (必须在 extension.h 之前)
+// 【第二区】SDK 核心前置定义 (解决依赖死锁)
 // ============================================================================
-// 1. 引入 platform.h，确保 abstract_class 等宏被定义
+// 1. 必须先引入 platform 和 memalloc 以获取 IMemAlloc 类型定义
 #include <tier0/platform.h>
-
-// 2. 引入 memalloc.h，获取 IMemAlloc 类的定义
 #include <tier0/memalloc.h>
 
-// 3. 【关键】显式声明全局变量 g_pMemAlloc
-// 这样当 extension.h 里的 icvar.h 试图使用它时，它已经存在了
+// 2. 【关键】显式声明全局内存分配器变量
+// 这样稍后引入 extension.h 时，里面的 icvar.h 就能找到 g_pMemAlloc，不再报错
 extern IMemAlloc *g_pMemAlloc;
 
-// 4. 修复 vector.h 可能用到的函数映射
-// 必须在引入 memalloc.h *之后* 定义，否则会破坏 memalloc.h 里的函数声明
-#define MemAlloc_AllocAlignedFileLine MemAlloc_AllocAligned
-
 // ============================================================================
-// 第三步：SourceMod 扩展入口
+// 【第三区】SourceMod 扩展入口
 // ============================================================================
-// 现在环境已经准备好了，可以安全引入 extension.h
+// 环境已就绪，现在可以安全引入 extension.h 了
 #include "extension.h"
 
 // ============================================================================
-// 第四步：其他 SDK 接口与逻辑
+// 【第四区】业务逻辑头文件
 // ============================================================================
 #include <ihandleentity.h>
 
-// 定义假类以解决 CBasePlayer 未知类型报错
+// 定义假类以欺骗 SDK 头文件，解决 CBasePlayer 未知类型报错
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
@@ -46,7 +51,7 @@ enum PLAYER_ANIM {
     PLAYER_IDLE, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1 
 };
 
-// 引入其他必要的 SDK 头文件
+// 引入业务接口
 #include <engine/IEngineTrace.h>
 #include <ispatialpartition.h> // ITraceFilter 定义在此
 #include <igamemovement.h>
@@ -71,7 +76,7 @@ MomSurfFixExt g_MomSurfFixExt;
 // 接口指针
 IEngineTrace *enginetrace = nullptr;
 
-// 工厂函数定义
+// 工厂函数类型定义
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
 ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
@@ -115,7 +120,7 @@ private:
 };
 
 // ============================================================================
-// 辅助函数实现
+// 逻辑函数
 // ============================================================================
 void Manual_TracePlayerBBox(IGameMovement *pGM, const Vector &start, const Vector &end, unsigned int fMask, int collisionGroup, CGameTrace &pm)
 {
@@ -184,8 +189,9 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 }
 
 // ============================================================================
-// Detour 回调
+// Detour 函数
 // ============================================================================
+// 使用 void* 避免类型依赖问题
 typedef int (*TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
@@ -328,7 +334,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 }
 
 // ============================================================================
-// 生命周期
+// 扩展加载/卸载
 // ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
@@ -375,7 +381,8 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 获取 CreateInterface (手动工厂模式)
+    // 获取 Trace 接口
+    // 使用手动工厂查找，是最稳妥的获取引擎接口方式
     void *pCreateInterface = nullptr;
     if (conf->GetMemSig("CreateInterface", &pCreateInterface) && pCreateInterface)
     {
