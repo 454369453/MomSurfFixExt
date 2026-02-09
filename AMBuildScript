@@ -5,8 +5,8 @@ import os
 # 检测 C++ 编译器，使用注入的目标架构
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
 
-# 创建动态库目标
-library = cxx.Library(builder, 'momsurffix_ext.ext')
+# 创建动态库目标（移除多余的 builder 参数）
+library = cxx.Library('momsurffix_ext.ext')
 
 # 添加源文件
 library.sources += [
