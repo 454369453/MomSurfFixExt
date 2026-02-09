@@ -4,33 +4,45 @@ import os
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
 library = cxx.Library('momsurffix_ext.ext')
 
-# 添加我们的源文件
+# 添加源文件
 library.sources += [ 'momsurffix_ext.cpp', 'simple_detour.cpp' ]
 
 sm_path = builder.options.sm_path
 mms_path = builder.options.mms_path
 hl2sdk_path = builder.options.hl2sdk_path
 
+# ---------------------------------------------------------
+# 1. 头文件路径
+# ---------------------------------------------------------
 library.compiler.includes += [
     builder.sourcePath,
     os.path.join(sm_path, 'public'),
     os.path.join(sm_path, 'public/extensions'),
     os.path.join(sm_path, 'public/sourcepawn'),
     os.path.join(sm_path, 'sourcepawn/include'),
+    # AMTL 支持
     os.path.join(sm_path, 'public/amtl'),
     os.path.join(sm_path, 'public/amtl/amtl'),
     os.path.join(sm_path, 'third_party/amtl'),
     os.path.join(sm_path, 'third_party/amtl/amtl'),
+    # Metamod
     os.path.join(mms_path, 'core'),
     os.path.join(mms_path, 'core/sourcehook'),
+    # HL2SDK
     os.path.join(hl2sdk_path, 'public'),
     os.path.join(hl2sdk_path, 'public/engine'),
     os.path.join(hl2sdk_path, 'public/mathlib'),
     os.path.join(hl2sdk_path, 'public/vstdlib'),
     os.path.join(hl2sdk_path, 'public/tier0'),
     os.path.join(hl2sdk_path, 'public/tier1'),
+    # 【关键修复】添加 game/shared 路径，否则找不到 cbase.h 和 igamemovement.h
+    os.path.join(hl2sdk_path, 'game/shared'),
+    os.path.join(hl2sdk_path, 'common'),
 ]
 
+# ---------------------------------------------------------
+# 2. 宏定义 (Defines)
+# ---------------------------------------------------------
 library.compiler.defines += [
     'SOURCEMOD_BUILD',
     'HAVE_STRING_H',
@@ -41,9 +53,17 @@ library.compiler.defines += [
     'POSIX',
     '_POSIX',
     '_NATIVE_WCHAR_T_DEFINED',
-    'register=',
+    # 修复 register 关键字报错
+    'register=', 
+    # CSGO 特定宏，防止 cbase.h 报错
+    'GNUC', 
+    'NO_HOOK_MALLOC', 
+    'NO_MALLOC_OVERRIDE'
 ]
 
+# ---------------------------------------------------------
+# 3. 编译器标志 (CXX Flags)
+# ---------------------------------------------------------
 library.compiler.cxxflags += [
     '-std=c++17',
     '-fno-threadsafe-statics',
@@ -53,8 +73,12 @@ library.compiler.cxxflags += [
     '-Wno-macro-redefined',
     '-Wno-implicit-const-int-float-conversion',
     '-Wno-register',
+    '-Wno-invalid-offsetof', # 忽略 offsetof 警告
 ]
 
+# ---------------------------------------------------------
+# 4. 链接设置
+# ---------------------------------------------------------
 library.compiler.linkflags += ['-m32', '-lm', '-ldl']
 
 library.compiler.postlink += [
