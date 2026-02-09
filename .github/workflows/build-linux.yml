@@ -30,7 +30,7 @@ jobs:
       run: |
         git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod
         git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource
-        git clone --recursive https://github.com/alliedmodders/hl2sdk -b sdk2013 hl2sdk-csgo  # 使用 sdk2013 分支适用于 CS:GO
+        git clone --recursive https://github.com/alliedmodders/hl2sdk -b sdk2013 hl2sdk-csgo
 
     - name: Configure and Build
       run: |
@@ -40,10 +40,10 @@ jobs:
         export MMSOURCE=/home/runner/work/MomSurfFixExt/MomSurfFixExt/mmsource
         export SOURCEMOD=/home/runner/work/MomSurfFixExt/MomSurfFixExt/sourcemod
         python3 ../configure.py --sdks=csgo --targets=x86
-        ambuild
+        make -j4  # 使用4线程构建
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: momsurffix_ext-so
-        path: build/package/addons/sourcemod/extensions/momsurffix_ext.ext.so  # 如路径不同，根据日志调整
+        path: build/momsurffix_ext.ext.so  # 调整为实际输出路径
