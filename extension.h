@@ -2,7 +2,8 @@
 #define _INCLUDE_SOURCEMOD_EXTENSION_PROPER_H_
 
 #include "smsdk_ext.h"
-#include <CDetour/idetour.h> // 引入原生 Detour
+// 【修改】直接引用，因为我们把 public/CDetour 加入了 include path
+#include <idetour.h> 
 
 class MomSurfFixExt : public SDKExtension
 {
