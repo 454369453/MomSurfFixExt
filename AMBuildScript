@@ -13,13 +13,14 @@ library.sources += [
     'momsurffix_ext.cpp',
 ]
 
-# 添加包括路径，使用注入的选项，并添加当前源目录
+# 添加包括路径，使用注入的选项，并添加 AMTL 目录
 library.compiler.includes += [
-    builder.sourcePath,  # 添加仓库根目录，以包含 smsdk_config.h
+    builder.sourcePath,  # 根目录
     os.path.join(builder.options.sm_path, 'public'),
     os.path.join(builder.options.sm_path, 'public/extensions'),
     os.path.join(builder.options.sm_path, 'public/sourcepawn'),
     os.path.join(builder.options.sm_path, 'sourcepawn/include'),
+    os.path.join(builder.options.sm_path, 'public/amtl'),  # 添加 AMTL 路径以包含 am-string.h
     os.path.join(builder.options.mms_path, 'core'),
     os.path.join(builder.options.mms_path, 'core/sourcehook'),
     os.path.join(builder.options.hl2sdk_path, 'public'),
