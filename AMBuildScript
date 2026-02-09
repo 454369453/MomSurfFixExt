@@ -2,7 +2,7 @@
 
 import os
 
-# 检测C++编译器，使用注入的目标架构
+# 检测 C++ 编译器，使用注入的目标架构
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
 
 # 创建动态库目标
@@ -29,7 +29,7 @@ library.compiler.includes += [
     os.path.join(builder.options.hl2sdk_path, 'public/tier1'),
 ]
 
-# 添加链接标志和库（针对Linux 32位）
+# 添加链接标志和库（针对 Linux 32位）
 library.compiler.linkflags += ['-m32']
 library.compiler.postlink += [
     os.path.join(builder.options.hl2sdk_path, 'lib/linux/tier1_i486.a'),
