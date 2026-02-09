@@ -20,24 +20,22 @@ library.compiler.includes += [
     os.path.join(sm_path, 'public/extensions'),
     os.path.join(sm_path, 'public/sourcepawn'),
     os.path.join(sm_path, 'sourcepawn/include'),
-    # AMTL 支持
     os.path.join(sm_path, 'public/amtl'),
     os.path.join(sm_path, 'public/amtl/amtl'),
     os.path.join(sm_path, 'third_party/amtl'),
     os.path.join(sm_path, 'third_party/amtl/amtl'),
-    # Metamod
     os.path.join(mms_path, 'core'),
     os.path.join(mms_path, 'core/sourcehook'),
-    # HL2SDK
     os.path.join(hl2sdk_path, 'public'),
     os.path.join(hl2sdk_path, 'public/engine'),
     os.path.join(hl2sdk_path, 'public/mathlib'),
     os.path.join(hl2sdk_path, 'public/vstdlib'),
     os.path.join(hl2sdk_path, 'public/tier0'),
     os.path.join(hl2sdk_path, 'public/tier1'),
-    # 【关键修复】添加 game/shared 路径，否则找不到 cbase.h 和 igamemovement.h
     os.path.join(hl2sdk_path, 'game/shared'),
     os.path.join(hl2sdk_path, 'common'),
+    # 【新增】加入 server 路径，虽然可能有冲突，但为了 cbase.h 最好加上
+    os.path.join(hl2sdk_path, 'game/server'),
 ]
 
 # ---------------------------------------------------------
@@ -53,12 +51,16 @@ library.compiler.defines += [
     'POSIX',
     '_POSIX',
     '_NATIVE_WCHAR_T_DEFINED',
-    # 修复 register 关键字报错
     'register=', 
-    # CSGO 特定宏，防止 cbase.h 报错
     'GNUC', 
     'NO_HOOK_MALLOC', 
-    'NO_MALLOC_OVERRIDE'
+    'NO_MALLOC_OVERRIDE',
+    
+    # 【关键修复】内存分配宏映射 (Windows -> Linux)
+    # 注意：aligned_alloc 的参数顺序是 (alignment, size)，与 _aligned_malloc 相反！
+    '_aligned_malloc(size, align)=aligned_alloc(align, size)',
+    '_aligned_free=free',
+    'MemAlloc_AllocAlignedFileLine(size, align, file, line)=aligned_alloc(align, size)'
 ]
 
 # ---------------------------------------------------------
@@ -69,11 +71,14 @@ library.compiler.cxxflags += [
     '-fno-threadsafe-statics',
     '-fvisibility=hidden',
     '-fshort-wchar',
+    # 【关键修复】允许 Microsoft 扩展，解决 enum 前置声明报错
+    '-fms-extensions', 
     '-Wno-deprecated-declarations',
     '-Wno-macro-redefined',
     '-Wno-implicit-const-int-float-conversion',
     '-Wno-register',
-    '-Wno-invalid-offsetof', # 忽略 offsetof 警告
+    '-Wno-invalid-offsetof',
+    '-Wno-return-type-c-linkage', # 忽略一些链接警告
 ]
 
 # ---------------------------------------------------------
