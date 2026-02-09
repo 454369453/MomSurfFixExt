@@ -1,80 +1,47 @@
-# AMBuildScript
+# AMBuildScript - 定义构建逻辑
+
 import os
 
+# 检测 C++ 编译器，使用注入的目标架构
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
+
+# 创建动态库目标
 library = cxx.Library('momsurffix_ext.ext')
 
 # 添加源文件
-library.sources += [ 'momsurffix_ext.cpp', 'simple_detour.cpp' ]
+library.sources += [
+    'momsurffix_ext.cpp',
+]
 
-sm_path = builder.options.sm_path
-mms_path = builder.options.mms_path
-hl2sdk_path = builder.options.hl2sdk_path
-
-# 头文件路径 (注意：不要包含 game/server)
+# 添加包括路径，使用注入的选项，并添加 AMTL 子模块路径
 library.compiler.includes += [
-    builder.sourcePath,
-    os.path.join(sm_path, 'public'),
-    os.path.join(sm_path, 'public/extensions'),
-    os.path.join(sm_path, 'public/sourcepawn'),
-    os.path.join(sm_path, 'sourcepawn/include'),
-    os.path.join(sm_path, 'public/amtl'),
-    os.path.join(sm_path, 'public/amtl/amtl'),
-    os.path.join(sm_path, 'third_party/amtl'),
-    os.path.join(sm_path, 'third_party/amtl/amtl'),
-    os.path.join(mms_path, 'core'),
-    os.path.join(mms_path, 'core/sourcehook'),
-    os.path.join(hl2sdk_path, 'public'),
-    os.path.join(hl2sdk_path, 'public/engine'),
-    os.path.join(hl2sdk_path, 'public/mathlib'),
-    os.path.join(hl2sdk_path, 'public/vstdlib'),
-    os.path.join(hl2sdk_path, 'public/tier0'),
-    os.path.join(hl2sdk_path, 'public/tier1'),
-    os.path.join(hl2sdk_path, 'game/shared'),
-    os.path.join(hl2sdk_path, 'common'),
+    builder.sourcePath,  # 根目录
+    os.path.join(builder.options.sm_path, 'public'),
+    os.path.join(builder.options.sm_path, 'public/extensions'),
+    os.path.join(builder.options.sm_path, 'public/sourcepawn'),
+    os.path.join(builder.options.sm_path, 'sourcepawn/include'),
+    os.path.join(builder.options.sm_path, 'public/amtl'),
+    os.path.join(builder.options.sm_path, 'amtl'),  # 子模块根路径
+    os.path.join(builder.options.sm_path, 'amtl/amtl'),  # 头文件子目录
+    os.path.join(builder.options.mms_path, 'core'),
+    os.path.join(builder.options.mms_path, 'core/sourcehook'),
+    os.path.join(builder.options.hl2sdk_path, 'public'),
+    os.path.join(builder.options.hl2sdk_path, 'public/engine'),
+    os.path.join(builder.options.hl2sdk_path, 'public/mathlib'),
+    os.path.join(builder.options.hl2sdk_path, 'public/vstdlib'),
+    os.path.join(builder.options.hl2sdk_path, 'public/tier0'),
+    os.path.join(builder.options.hl2sdk_path, 'public/tier1'),
 ]
 
-# 宏定义 (移除了复杂的函数宏，保留基本开关)
-library.compiler.defines += [
-    'SOURCEMOD_BUILD',
-    'HAVE_STRING_H',
-    'SE_EPISODEONE',
-    'COMPILER_GCC',
-    'SOURCE_ENGINE=SE_EPISODEONE'
-    'SMEXT_CONF_METAMOD',
-    '_LINUX',
-    'LINUX',
-    'POSIX',
-    '_POSIX',
-    '_NATIVE_WCHAR_T_DEFINED',
-    'register=', 
-    'GNUC', 
-    'NO_HOOK_MALLOC', 
-    'NO_MALLOC_OVERRIDE',
-]
-
-# 编译器标志
-library.compiler.cxxflags += [
-    '-std=c++17',
-    '-fno-threadsafe-statics',
-    '-fvisibility=hidden',
-    '-fshort-wchar',
-    '-fms-extensions',
-    '-Wno-deprecated-declarations',
-    '-Wno-macro-redefined',
-    '-Wno-implicit-const-int-float-conversion',
-    '-Wno-register',
-    '-Wno-invalid-offsetof',
-    '-Wno-return-type-c-linkage',
-]
-
-# 链接设置
-library.compiler.linkflags += ['-m32', '-lm', '-ldl']
-
+# 添加链接标志和库（针对 Linux 32位）
+library.compiler.linkflags += ['-m32']
 library.compiler.postlink += [
-    os.path.join(hl2sdk_path, 'lib/linux/tier1_i486.a'),
-    os.path.join(hl2sdk_path, 'lib/linux/mathlib_i486.a'),
-    os.path.join(hl2sdk_path, 'lib/linux/interfaces_i486.a'),
+    os.path.join(builder.options.hl2sdk_path, 'lib/linux/tier1_i486.a'),
+    os.path.join(builder.options.hl2sdk_path, 'lib/linux/mathlib_i486.a'),
 ]
 
+# 添加预处理器定义
+library.compiler.defines += ['SOURCEMOD_BUILD', 'HAVE_STRING_H']
+
+# 添加到构建图
 builder.Add(library)
