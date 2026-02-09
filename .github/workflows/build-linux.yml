@@ -28,14 +28,14 @@ jobs:
 
     - name: Clone SDKs
       run: |
-        git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-stable sourcemod
-        git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-stable mmsource
-        git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo  # 如为 CS:S，替换为 hl2sdk-css
+        git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod
+        git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource
+        git clone --recursive https://github.com/alliedmodders/hl2sdk -b sdk2013 hl2sdk-csgo  # 使用 sdk2013 分支适用于 CS:GO
 
     - name: Configure and Build
       run: |
         mkdir build && cd build
-        export PATH=$HOME/.local/bin:$PATH  # 确保 ambuild 可执行
+        export PATH=$HOME/.local/bin:$PATH
         export HL2SDK=/home/runner/work/MomSurfFixExt/MomSurfFixExt/hl2sdk-csgo
         export MMSOURCE=/home/runner/work/MomSurfFixExt/MomSurfFixExt/mmsource
         export SOURCEMOD=/home/runner/work/MomSurfFixExt/MomSurfFixExt/sourcemod
@@ -46,4 +46,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: momsurffix_ext-so
-        path: build/package/addons/sourcemod/extensions/momsurffix_ext.ext.so  # 输出路径可能需根据日志调整为 build/momsurffix_ext.ext.so
+        path: build/package/addons/sourcemod/extensions/momsurffix_ext.ext.so  # 如路径不同，根据日志调整
