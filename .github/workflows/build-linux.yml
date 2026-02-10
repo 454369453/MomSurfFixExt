@@ -20,8 +20,18 @@ jobs:
       run: |
         sudo dpkg --add-architecture i386
         sudo apt-get update
+        # 1️⃣ 安装确定存在的 gcc-9 本体
         sudo apt-get install -y --no-install-recommends \
-          gcc-9-multilib g++-9-multilib \
+          gcc-9 g++-9
+
+        # 2️⃣ 手动安装 32 位运行库（关键）
+        sudo apt-get install -y --no-install-recommends \
+          libc6-dev-i386 \
+          lib32stdc++6 \
+          lib32z1-dev
+
+        # 3️⃣ 基础工具
+        sudo apt-get install -y --no-install-recommends \
           make python3 python3-pip git ca-certificates
 
     - name: Install AMBuild
@@ -40,7 +50,7 @@ jobs:
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
 
     - name: Configure
-      # 【核心修改】这里必须显式指定用 gcc-9，否则 AMBuild 会自己去找 clang
+      # 强制指定 GCC-9，AMBuild 会读取这些环境变量
       env:
         CC: gcc-9
         CXX: g++-9
@@ -48,7 +58,6 @@ jobs:
         mkdir build
         cd build
         python3 ../configure.py \
-          --enable-optimize \
           --sdks=csgo \
           --targets=x86 \
           --sm-path="${{ github.workspace }}/sdks/sourcemod" \
@@ -56,7 +65,6 @@ jobs:
           --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-csgo"
 
     - name: Build
-      # 【核心修改】编译时也要指定，防止它中途变卦
       env:
         CC: gcc-9
         CXX: g++-9
