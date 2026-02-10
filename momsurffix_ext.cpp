@@ -1,11 +1,30 @@
 // ============================================================================
-// 【第一区】标准头文件 & 兼容性配置
+// 【第一区】标准库与内存兼容层 (The "Main Road")
 // ============================================================================
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <stdlib.h> // 【微调】POSIX 标准头文件，包含 posix_memalign
 
-// 1. 兼容性宏 (保持不变，这是为了兼容旧版 SDK 代码习惯)
+// 【核心实现】linux_aligned_malloc
+// 使用 posix_memalign 替代 aligned_alloc，消除对 size 的苛刻限制
+// 这是 Valve 遗留代码在 Linux 下最稳健的内存分配方式
+static inline void* linux_aligned_malloc(size_t size, size_t align)
+{
+    void* ptr = nullptr;
+    // posix_memalign 返回 0 表示成功，非 0 表示失败
+    if (posix_memalign(&ptr, align, size) != 0)
+        return nullptr;
+    return ptr;
+}
+
+// 映射 Valve 的 Windows 风格函数
+#undef _aligned_malloc
+#undef _aligned_free
+#define _aligned_malloc(size, align) linux_aligned_malloc(size, align)
+#define _aligned_free free
+
+// 基础兼容宏
 #ifndef abstract_class
     #define abstract_class class
 #endif
@@ -13,22 +32,24 @@
     #define OVERRIDE override
 #endif
 
-// 2. 内存管理配置 (走官方正道)
-// 告诉 SDK：不要尝试 hook 系统的 malloc/free，我们不搞那套复杂的内存覆写
-#define NO_MALLOC_OVERRIDE
-#define NO_HOOK_MALLOC
+// 【关键决策】这里绝不定义 NO_MALLOC_OVERRIDE
+// 我们接受 SourceMod/Tier0 的内存接管，这是正道。
 
 // ============================================================================
 // 【第二区】SDK 核心头文件
 // ============================================================================
 #include <tier0/platform.h>
-
-// 【核心修正】直接引入官方 memalloc.h，不再手动伪造
-// 现在的 AMBuildScript 宏定义正确，这里不会再报 tchar.h 错误
 #include <tier0/memalloc.h>
 
-// 【补丁】如果 SDK 没有定义这个宏（通常在 NO_MALLOC_OVERRIDE 下会漏），补一个空定义
-// 防止 utlmemory.h / utlvector.h 报错
+// 【ABI 修正】MemAlloc_AllocAlignedFileLine
+// 既然接受了 tier0 接管，我们就可以安全调用 AllocAligned
+// 这保证了 SSE/Vector 运算所需的 16 字节严格对齐，防止数学库 UB
+#ifndef MemAlloc_AllocAlignedFileLine
+    #define MemAlloc_AllocAlignedFileLine(size, align, file, line) \
+        g_pMemAlloc->AllocAligned(size, align, file, line)
+#endif
+
+// 补全可能缺失的宏
 #ifndef MEM_ALLOC_CREDIT_CLASS
     #define MEM_ALLOC_CREDIT_CLASS()
 #endif
@@ -38,17 +59,15 @@
 // ============================================================================
 #include "extension.h"
 
-// 【关键定义】SDK 头文件里只是 extern IMemAlloc *g_pMemAlloc;
-// 我们必须在 .cpp 里定义这个全局指针，否则链接时 tier1.a 会报 "undefined reference"
-// (注意：如果未来代码里使用了 g_pMemAlloc，记得在 OnLoad 里初始化它)
-IMemAlloc *g_pMemAlloc = nullptr;
+// 【生命周期修正】
+// 我们不自己定义 g_pMemAlloc，也不手动初始化它。
+// 链接时，tier0_i486.a 或 SourceMod 加载器会处理符号解析。
 
 // ============================================================================
 // 【第四区】业务逻辑头文件
 // ============================================================================
 #include <ihandleentity.h>
 
-// 欺骗编译器的假类定义 (保持不变)
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
@@ -65,7 +84,7 @@ enum PLAYER_ANIM {
 #include "simple_detour.h"
 
 // ============================================================================
-// 全局变量
+// 全局变量 & 业务逻辑 (保持不变)
 // ============================================================================
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
@@ -95,9 +114,7 @@ CSimpleDetour *g_pDetour = nullptr;
 static CGameTrace g_TempTraces[MAXPLAYERS + 1];
 static Vector g_TempPlanes[MAX_CLIP_PLANES];
 
-// ============================================================================
 // 辅助类
-// ============================================================================
 class CTraceFilterSimple : public ITraceFilter
 {
 public:
@@ -119,9 +136,7 @@ private:
     int m_collisionGroup;
 };
 
-// ============================================================================
-// 逻辑函数
-// ============================================================================
+// 业务逻辑函数
 void Manual_TracePlayerBBox(IGameMovement *pGM, const Vector &start, const Vector &end, unsigned int fMask, int collisionGroup, CGameTrace &pm)
 {
     if (!enginetrace) return;
@@ -188,9 +203,7 @@ bool IsValidMovementTrace(const CGameTrace &tr)
     return (tr.fraction > 0.0f || tr.startsolid);
 }
 
-// ============================================================================
 // Detour 函数
-// ============================================================================
 typedef int (*TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
@@ -200,10 +213,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
 
-    if (!pPlayer || !mv || !Original)
-    {
-        return 0;
-    }
+    if (!pPlayer || !mv || !Original) return 0;
 
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
 
@@ -249,11 +259,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
             Manual_TracePlayerBBox(pGM, origin, end, MASK_PLAYERSOLID, COLLISION_GROUP_PLAYER_MOVEMENT, pm);
         }
 
-        if (pm.fraction > 0.0f)
-        {
-            origin = pm.endpos;
-        }
-
+        if (pm.fraction > 0.0f) origin = pm.endpos;
         if (pm.fraction == 1.0f) break;
 
         time_left -= time_left * pm.fraction;
@@ -310,9 +316,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
             else
             {
                 float dot = DotProduct(new_vel, new_vel);
-                if (dot > 0.0f)
-                    new_vel *= (vel.Length() / sqrt(dot));
-
+                if (dot > 0.0f) new_vel *= (vel.Length() / sqrt(dot));
                 vel = new_vel;
             }
 
@@ -332,9 +336,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     return blocked;
 }
 
-// ============================================================================
 // 生命周期
-// ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
     char conf_error[255];
@@ -350,14 +352,14 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         !conf->GetOffset("CMoveData::m_vecVelocity", &g_off_VecVelocity) ||
         !conf->GetOffset("CMoveData::m_vecAbsOrigin", &g_off_VecAbsOrigin))
     {
-        snprintf(error, maxlength, "Failed to get core offsets from gamedata.");
+        snprintf(error, maxlength, "Failed to get core offsets.");
         gameconfs->CloseGameConfigFile(conf);
         return false;
     }
 
     if (!conf->GetOffset("CBasePlayer::m_hGroundEntity", &g_off_GroundEntity))
     {
-         snprintf(error, maxlength, "Missing 'CBasePlayer::m_hGroundEntity' in gamedata.");
+         snprintf(error, maxlength, "Missing 'CBasePlayer::m_hGroundEntity'.");
          gameconfs->CloseGameConfigFile(conf);
          return false;
     }
@@ -365,7 +367,7 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
     void *pTryPlayerMoveAddr = nullptr;
     if (!conf->GetMemSig("CGameMovement::TryPlayerMove", &pTryPlayerMoveAddr) || !pTryPlayerMoveAddr)
     {
-        snprintf(error, maxlength, "Failed to find signature for TryPlayerMove.");
+        snprintf(error, maxlength, "Failed to find TryPlayerMove signature.");
         gameconfs->CloseGameConfigFile(conf);
         return false;
     }
@@ -380,7 +382,6 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 获取 Trace 接口
     void *pCreateInterface = nullptr;
     if (conf->GetMemSig("CreateInterface", &pCreateInterface) && pCreateInterface)
     {
