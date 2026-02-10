@@ -15,9 +15,7 @@
 #ifndef abstract_class
     #define abstract_class class
 #endif
-#ifndef PLATFORM_INTERFACE
-    #define PLATFORM_INTERFACE extern "C"
-#endif
+
 #ifndef OVERRIDE
     #define OVERRIDE override
 #endif
