@@ -6,9 +6,7 @@
 #include <cstdint>
 #include <stdlib.h> // posix_memalign
 
-// 1. Linux 内存分配垫片 (核心)
-// HL2SDK 的 memalloc.h 在 Linux 下依然调用 _aligned_malloc，必须提供实现
-// 使用 posix_memalign 是最稳健的，兼容 glibc 各版本
+// 1. Linux 内存分配垫片
 static inline void* linux_aligned_malloc(size_t size, size_t align)
 {
     void* ptr = nullptr;
@@ -18,7 +16,6 @@ static inline void* linux_aligned_malloc(size_t size, size_t align)
 }
 
 // 2. 宏映射
-// 在包含任何 SDK 头文件之前定义，这样 SDK 内部的代码就会使用我们的实现
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) linux_aligned_malloc(size, align)
@@ -32,21 +29,38 @@ static inline void* linux_aligned_malloc(size_t size, size_t align)
     #define OVERRIDE override
 #endif
 
-// 【关键修正】这里绝对不要定义 NO_MALLOC_OVERRIDE
-// 让 SDK 正常工作，它会提供 g_pMemAlloc 和 MemAlloc_AllocAligned
-
 // ============================================================================
 // 【第二区】SDK 核心头文件
 // ============================================================================
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 
-// 此时：
-// 1. g_pMemAlloc 正常声明，icvar.h 不会报错
-// 2. MemAlloc_AllocAligned 由 SDK 定义，调用我们的 _aligned_malloc 宏
-// 3. vector.h 能正常使用上述函数
+// 4. 手动补全被 SDK 可能屏蔽的内联函数
+#ifndef MemAlloc_AllocAlignedFileLine
+inline void *MemAlloc_AllocAlignedFileLine( size_t size, size_t align, const char *pFileName, int nLine )
+{
+    return linux_aligned_malloc(size, align);
+}
+#endif
 
-// 补全可能缺失的工具宏
+#ifndef MemAlloc_AllocAligned
+inline void *MemAlloc_AllocAligned( size_t size, size_t align )
+{
+    return linux_aligned_malloc(size, align);
+}
+#endif
+
+#ifndef MemAlloc_FreeAligned
+inline void MemAlloc_FreeAligned( void *pMemBlock )
+{
+    free(pMemBlock);
+}
+inline void MemAlloc_FreeAligned( void *pMemBlock, const char *pFileName, int nLine )
+{
+    free(pMemBlock);
+}
+#endif
+
 #ifndef MEM_ALLOC_CREDIT_CLASS
     #define MEM_ALLOC_CREDIT_CLASS()
 #endif
@@ -55,6 +69,7 @@ static inline void* linux_aligned_malloc(size_t size, size_t align)
 // 【第三区】SourceMod 扩展入口
 // ============================================================================
 #include "extension.h"
+#include "smsdk_config.h"
 
 // ============================================================================
 // 【第四区】业务逻辑头文件
@@ -72,12 +87,10 @@ enum PLAYER_ANIM {
 #include <ispatialpartition.h> 
 #include <igamemovement.h>
 #include <tier0/vprof.h>
-
-#include "smsdk_config.h"
 #include "simple_detour.h"
 
 // ============================================================================
-// 全局变量 & 业务逻辑
+// 全局变量
 // ============================================================================
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
@@ -196,7 +209,7 @@ bool IsValidMovementTrace(const CGameTrace &tr)
     return (tr.fraction > 0.0f || tr.startsolid);
 }
 
-// Detour 函数 - 【ABI 修正】
+// Detour 函数
 #ifndef THISCALL
     #define THISCALL
 #endif
@@ -330,9 +343,12 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     *pOrigin = origin;
 
     return blocked;
-}
+} 
+// 注意：上面这个大括号是 Detour_TryPlayerMove 的结束，千万不能少！
 
+// ============================================================================
 // 生命周期
+// ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
     char conf_error[255];
