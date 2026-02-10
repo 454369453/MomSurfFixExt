@@ -48,6 +48,9 @@ enum PLAYER_ANIM {
 #endif
 
 MomSurfFixExt g_MomSurfFixExt;
+
+SMEXT_LINK(&g_MomSurfFixExt);
+
 IEngineTrace *enginetrace = nullptr;
 
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
