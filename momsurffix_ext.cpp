@@ -49,6 +49,12 @@ enum PLAYER_ANIM {
 MomSurfFixExt g_MomSurfFixExt;
 IEngineTrace *enginetrace = nullptr;
 
+IExtension *g_pExtensionIface = nullptr;
+const SourceHook::ISourceHook *g_pSourceHook = nullptr;
+IShareSys *g_pShareSys = nullptr;
+ISmmAPI *g_pSM = nullptr;
+const void *g_pMetaGlobals = nullptr;
+
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
 ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
