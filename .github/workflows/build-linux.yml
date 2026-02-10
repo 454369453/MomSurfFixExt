@@ -77,4 +77,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: momsurffix_ext_linux
-        path: build/package/addons/sourcemod/extensions/momsurffix_ext.ext.so
+        path: build/**/momsurffix_ext.ext.so
