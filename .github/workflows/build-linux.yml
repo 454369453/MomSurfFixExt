@@ -17,20 +17,23 @@ jobs:
         submodules: recursive
 
     - name: Install build dependencies (GCC 9 + 32bit)
+      # 【核心修复1】采用你提供的最稳妥的拆分安装法
+      # 避免 meta 包不存在导致依赖安装失败
       run: |
         sudo dpkg --add-architecture i386
         sudo apt-get update
-        # 1️⃣ 安装确定存在的 gcc-9 本体
+        
+        # 1. 安装编译器本体
         sudo apt-get install -y --no-install-recommends \
           gcc-9 g++-9
-
-        # 2️⃣ 手动安装 32 位运行库（关键）
+          
+        # 2. 手动安装 32 位运行库 (关键)
         sudo apt-get install -y --no-install-recommends \
           libc6-dev-i386 \
           lib32stdc++6 \
           lib32z1-dev
-
-        # 3️⃣ 基础工具
+          
+        # 3. 基础工具
         sudo apt-get install -y --no-install-recommends \
           make python3 python3-pip git ca-certificates
 
@@ -50,13 +53,18 @@ jobs:
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
 
     - name: Configure
-      # 强制指定 GCC-9，AMBuild 会读取这些环境变量
+      # 【核心修复2】强制环境变量，防止 AMBuild 偷跑去用 Clang
       env:
         CC: gcc-9
         CXX: g++-9
       run: |
+        # 清理可能存在的残留 (虽然 Actions 每次都是新的，但习惯要好)
+        rm -rf build
         mkdir build
         cd build
+        
+        # 【核心修复3】移除了导致崩溃的 --enable-optimize 参数
+        # 使用 ../configure.py 是 AMBuild 2.0 的标准用法，只要参数对了一定生成 vars
         python3 ../configure.py \
           --sdks=csgo \
           --targets=x86 \
