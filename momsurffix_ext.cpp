@@ -1,77 +1,54 @@
 // ============================================================================
-// 【第一区】系统环境重构 (必须置顶)
+// 【第一区】标准头文件 & 兼容性配置
 // ============================================================================
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
 
-// 1. 内存函数映射
-#undef _aligned_malloc
-#undef _aligned_free
-#define _aligned_malloc(size, align) aligned_alloc(align, size)
-#define _aligned_free free
-
-// 2. 关键宏定义
+// 1. 兼容性宏 (保持不变，这是为了兼容旧版 SDK 代码习惯)
 #ifndef abstract_class
     #define abstract_class class
 #endif
-
 #ifndef OVERRIDE
     #define OVERRIDE override
 #endif
 
-// ============================================================================
-// 【第二区】完整伪造 SDK 内存管理层
-// ============================================================================
-// 定义 TIER0_MEMALLOC_H 宏，欺骗编译器跳过官方坏掉的 memalloc.h
-#ifndef TIER0_MEMALLOC_H
-#define TIER0_MEMALLOC_H
+// 2. 内存管理配置 (走官方正道)
+// 告诉 SDK：不要尝试 hook 系统的 malloc/free，我们不搞那套复杂的内存覆写
+#define NO_MALLOC_OVERRIDE
+#define NO_HOOK_MALLOC
 
+// ============================================================================
+// 【第二区】SDK 核心头文件
+// ============================================================================
 #include <tier0/platform.h>
 
-// 1. 手动定义 IMemAlloc 接口
-abstract_class IMemAlloc
-{
-public:
-    virtual void *Alloc(size_t nSize, const char *pFileName = 0, int nLine = 0) = 0;
-    virtual void *Realloc(void *pMem, size_t nSize, const char *pFileName = 0, int nLine = 0) = 0;
-    virtual void Free(void *pMem, const char *pFileName = 0, int nLine = 0) = 0;
-    virtual void *Expand_NoLongerSupported(void *pMem, size_t nSize, const char *pFileName = 0, int nLine = 0) = 0;
-    virtual void *Alloc(size_t nSize) = 0;
-    virtual void Free(void *pMem) = 0;
-};
+// 【核心修正】直接引入官方 memalloc.h，不再手动伪造
+// 现在的 AMBuildScript 宏定义正确，这里不会再报 tchar.h 错误
+#include <tier0/memalloc.h>
 
-// 2. 显式声明全局变量
-extern IMemAlloc *g_pMemAlloc;
-
-// 3. 补全 vector.h 依赖的辅助函数
-inline void *MemAlloc_AllocAligned(size_t size, size_t align) 
-{ 
-    return aligned_alloc(align, size); 
-}
-
-inline void MemAlloc_FreeAligned(void *p, const char *pFileName = nullptr, int nLine = 0) 
-{ 
-    free(p); 
-}
-
-// 4. 补全宏
-#define MEM_ALLOC_CREDIT_CLASS()
-#define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
-
-#endif // TIER0_MEMALLOC_H
+// 【补丁】如果 SDK 没有定义这个宏（通常在 NO_MALLOC_OVERRIDE 下会漏），补一个空定义
+// 防止 utlmemory.h / utlvector.h 报错
+#ifndef MEM_ALLOC_CREDIT_CLASS
+    #define MEM_ALLOC_CREDIT_CLASS()
+#endif
 
 // ============================================================================
 // 【第三区】SourceMod 扩展入口
 // ============================================================================
 #include "extension.h"
 
+// 【关键定义】SDK 头文件里只是 extern IMemAlloc *g_pMemAlloc;
+// 我们必须在 .cpp 里定义这个全局指针，否则链接时 tier1.a 会报 "undefined reference"
+// (注意：如果未来代码里使用了 g_pMemAlloc，记得在 OnLoad 里初始化它)
+IMemAlloc *g_pMemAlloc = nullptr;
+
 // ============================================================================
 // 【第四区】业务逻辑头文件
 // ============================================================================
 #include <ihandleentity.h>
 
-// 假类定义
+// 欺骗编译器的假类定义 (保持不变)
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
