@@ -32,8 +32,7 @@ library.compiler.includes += [
     os.path.join(hl2sdk_path, 'common'),
 ]
 
-# 【审计确认】
-# 移除了 NO_HOOK_MALLOC 和 NO_MALLOC_OVERRIDE，接受 SDK 内存接管
+# 核心宏定义 (干净版)
 library.compiler.defines += [
     'SOURCEMOD_BUILD',
     'HAVE_STRING_H',
@@ -48,8 +47,7 @@ library.compiler.defines += [
     'GNUC', 
 ]
 
-# 【审计确认】
-# 保留 -msse -msse2 确保 mathlib ABI 安全
+# 编译器标志 (GCC 9 + SSE)
 library.compiler.cxxflags += [
     '-std=c++17',
     '-fno-threadsafe-statics',
