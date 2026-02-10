@@ -1,15 +1,21 @@
 # AMBuildScript
 import os
 
-# 1. 检测编译器 (保持 x86 目标，不要动)
+# 1. 检测编译器
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
 library = cxx.Library('momsurffix_ext.ext')
 
-# 2. 源文件
-library.sources += [ 'momsurffix_ext.cpp', 'simple_detour.cpp' ]
-
-# 3. 获取路径参数
+# 2. 源文件 (修复点在此)
+# 我们需要把 SourceMod SDK 自带的 smsdk_ext.cpp 加进来
+# 否则会出现 undefined symbol: SDKExtension::Load
 sm_path = builder.options.sm_path
+library.sources += [
+    'momsurffix_ext.cpp',
+    'simple_detour.cpp',
+    os.path.join(sm_path, 'public', 'smsdk_ext.cpp')  # <--- 关键修复：加入 SDK 核心实现
+]
+
+# 3. 获取其他路径参数
 mms_path = builder.options.mms_path
 hl2sdk_path = builder.options.hl2sdk_path
 
@@ -51,7 +57,7 @@ library.compiler.defines += [
     'GNUC', 
 ]
 
-# 6. 编译器标志 (GCC 9+ 兼容性)
+# 6. 编译器标志
 library.compiler.cxxflags += [
     '-std=c++17',
     '-fno-threadsafe-statics',
@@ -74,11 +80,10 @@ library.compiler.cxxflags += [
 # 1. 设置 SDK 库目录
 libdir = os.path.join(hl2sdk_path, 'lib', 'linux')
 
-# 2. 关键：告诉链接器去 libdir 找库 (-L)，而不是把绝对路径写死在二进制里
+# 2. 关键：告诉链接器去 libdir 找库 (-L)
 library.compiler.linkflags += ['-lm', '-ldl', '-L' + libdir]
 
 # 3. 智能判断库名称 (tier0_srv 优先)
-# 我们只决定是用 "tier0" 还是 "tier0_srv" 这个名字
 name_tier0 = 'tier0'
 if os.path.exists(os.path.join(libdir, 'libtier0_srv.so')):
     name_tier0 = 'tier0_srv'
@@ -87,14 +92,13 @@ name_vstdlib = 'vstdlib'
 if os.path.exists(os.path.join(libdir, 'libvstdlib_srv.so')):
     name_vstdlib = 'vstdlib_srv'
 
-# 4. Postlink：静态库传路径，动态库传 -l 标志
-# 这样生成的 .so 只会记录依赖 "libtier0_srv.so"，由操作系统在运行时去加载它
+# 4. Postlink
 library.compiler.postlink += [
     os.path.join(libdir, 'tier1_i486.a'),
     os.path.join(libdir, 'mathlib_i486.a'),
     os.path.join(libdir, 'interfaces_i486.a'),
-    '-l' + name_tier0,    # 链接 -ltier0_srv 或 -ltier0
-    '-l' + name_vstdlib,  # 链接 -lvstdlib_srv 或 -lvstdlib
+    '-l' + name_tier0,    # -ltier0_srv
+    '-l' + name_vstdlib,  # -lvstdlib_srv
 ]
 
 builder.Add(library)
