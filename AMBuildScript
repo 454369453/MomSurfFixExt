@@ -1,7 +1,7 @@
 # AMBuildScript
 import os
 
-# 1. 检测编译器 (保持 x86 目标，千万不要改)
+# 1. 检测编译器 (保持 x86 目标，不要动)
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
 library = cxx.Library('momsurffix_ext.ext')
 
@@ -66,36 +66,35 @@ library.compiler.cxxflags += [
     '-Wno-invalid-offsetof',
 ]
 
-# 7. 链接标志
-library.compiler.linkflags += ['-lm', '-ldl']
-
 # =============================================================================
-# 【核心修复】链接 CS:GO Legacy (32-bit) 必须的 tier0 和 vstdlib
-# 解决 undefined symbol: Warning / ConMsg / g_pMemAlloc 问题
+# 【终极修复】正确链接 CS:GO Legacy (32-bit) 的 tier0 和 vstdlib
+# 解决 "cannot open shared object file" (硬编码路径) 问题
 # =============================================================================
 
+# 1. 设置 SDK 库目录
 libdir = os.path.join(hl2sdk_path, 'lib', 'linux')
 
-# 优先寻找 _srv.so (服务端专用版)，如果没有则寻找普通 .so
-lib_tier0 = os.path.join(libdir, 'libtier0_srv.so')
-lib_vstdlib = os.path.join(libdir, 'libvstdlib_srv.so')
+# 2. 关键：告诉链接器去 libdir 找库 (-L)，而不是把绝对路径写死在二进制里
+library.compiler.linkflags += ['-lm', '-ldl', '-L' + libdir]
 
-if not os.path.exists(lib_tier0):
-    lib_tier0 = os.path.join(libdir, 'libtier0.so')
-    
-if not os.path.exists(lib_vstdlib):
-    lib_vstdlib = os.path.join(libdir, 'libvstdlib.so')
+# 3. 智能判断库名称 (tier0_srv 优先)
+# 我们只决定是用 "tier0" 还是 "tier0_srv" 这个名字
+name_tier0 = 'tier0'
+if os.path.exists(os.path.join(libdir, 'libtier0_srv.so')):
+    name_tier0 = 'tier0_srv'
 
-# Postlink 顺序非常关键：
-# 1. 静态库 (.a) 必须在前
-# 2. 动态库 (.so) 必须在后
-# 这样链接器才能在 .so 中找到 .a 缺失的符号
+name_vstdlib = 'vstdlib'
+if os.path.exists(os.path.join(libdir, 'libvstdlib_srv.so')):
+    name_vstdlib = 'vstdlib_srv'
+
+# 4. Postlink：静态库传路径，动态库传 -l 标志
+# 这样生成的 .so 只会记录依赖 "libtier0_srv.so"，由操作系统在运行时去加载它
 library.compiler.postlink += [
     os.path.join(libdir, 'tier1_i486.a'),
     os.path.join(libdir, 'mathlib_i486.a'),
     os.path.join(libdir, 'interfaces_i486.a'),
-    lib_tier0,
-    lib_vstdlib,
+    '-l' + name_tier0,    # 链接 -ltier0_srv 或 -ltier0
+    '-l' + name_vstdlib,  # 链接 -lvstdlib_srv 或 -lvstdlib
 ]
 
 builder.Add(library)
