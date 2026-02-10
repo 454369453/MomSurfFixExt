@@ -1,78 +1,22 @@
 // ============================================================================
-// 【第一区】标准库与底层兼容层
+// 【第一区】标准库
 // ============================================================================
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
-#include <stdlib.h> // posix_memalign
-
-// 1. Linux 内存分配垫片
-static inline void* linux_aligned_malloc(size_t size, size_t align)
-{
-    void* ptr = nullptr;
-    if (posix_memalign(&ptr, align, size) != 0)
-        return nullptr;
-    return ptr;
-}
-
-// 2. 宏映射
-#undef _aligned_malloc
-#undef _aligned_free
-#define _aligned_malloc(size, align) linux_aligned_malloc(size, align)
-#define _aligned_free free
-
-// 3. 基础宏
-#ifndef abstract_class
-    #define abstract_class class
-#endif
-#ifndef OVERRIDE
-    #define OVERRIDE override
-#endif
 
 // ============================================================================
 // 【第二区】SDK 核心头文件
 // ============================================================================
+// 在 SourceMod 环境下，直接包含这些头文件即可
+// SDK 会自动处理内存管理，无需我们手动补丁
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
-
-// 4. 手动补全被 SDK 可能屏蔽的内联函数
-#ifndef MemAlloc_AllocAlignedFileLine
-inline void *MemAlloc_AllocAlignedFileLine( size_t size, size_t align, const char *pFileName, int nLine )
-{
-    return linux_aligned_malloc(size, align);
-}
-#endif
-
-#ifndef MemAlloc_AllocAligned
-inline void *MemAlloc_AllocAligned( size_t size, size_t align )
-{
-    return linux_aligned_malloc(size, align);
-}
-#endif
-
-#ifndef MemAlloc_FreeAligned
-inline void MemAlloc_FreeAligned( void *pMemBlock )
-{
-    free(pMemBlock);
-}
-inline void MemAlloc_FreeAligned( void *pMemBlock, const char *pFileName, int nLine )
-{
-    free(pMemBlock);
-}
-#endif
-
-#ifndef MEM_ALLOC_CREDIT_CLASS
-    #define MEM_ALLOC_CREDIT_CLASS()
-#endif
-
-// ============================================================================
-// 【第三区】SourceMod 扩展入口
-// ============================================================================
 #include "extension.h"
 #include "smsdk_config.h"
 
 // ============================================================================
-// 【第四区】业务逻辑头文件
+// 【第三区】业务逻辑头文件
 // ============================================================================
 #include <ihandleentity.h>
 
@@ -343,12 +287,9 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     *pOrigin = origin;
 
     return blocked;
-} 
-// 注意：上面这个大括号是 Detour_TryPlayerMove 的结束，千万不能少！
+}
 
-// ============================================================================
 // 生命周期
-// ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
     char conf_error[255];
