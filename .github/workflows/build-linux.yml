@@ -1,71 +1,73 @@
-name: Build CS:GO Extension
+name: Build MomSurfFix Extension on Linux
 
 on:
   push:
-    branches: ["master", "main", "gammacase"] # 确保包含你现在的分支
+    branches: [ main ]
   pull_request:
+    branches: [ main ]
 
 jobs:
   build:
-    name: Compile Extension
-    # 🌟 强烈建议用 20.04 避免 GCC 版本过高导致的 SDK 报错
+    # 【死因3修复】强制使用 Ubuntu 20.04
+    # 避免 GCC 版本过高 (11+) 导致的 SDK 语法错误 (CS:GO SDK 最好用 GCC 9 编译)
     runs-on: ubuntu-20.04
-    
+
     steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v4
-        with:
-          path: extension
-          # 🌟 如果你的 SDK 是作为 git submodule 添加的，必须递归拉取
-          submodules: recursive 
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        # 【死因2修复】必须递归拉取子模块
+        # 否则 SDK 里的 amtl 等依赖全是空文件夹，导致头文件找不到
+        submodules: recursive
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+    - name: Install 32-bit dependencies (Multilib)
+      # 【死因1修复】安装完整的 32 位编译环境
+      # 没有这些，编译器无法生成 32 位的 .so 文件，链接也会失败
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          gcc-multilib g++-multilib \
+          lib32stdc++6 lib32z1-dev libc6-dev-i386 \
+          python3 python3-pip clang
 
-      - name: Install AMBuild
-        run: pip install git+https://github.com/alliedmodders/ambuild
+    - name: Setup AMBuild
+      run: |
+        git clone https://github.com/alliedmodders/ambuild
+        cd ambuild
+        python3 setup.py install --user
+        # 将用户 bin 目录加入 PATH，确保能找到 ambuild 命令
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      # 🌟【关键步骤】安装 32 位编译环境，否则 100% 失败
-      - name: Install Linux 32-bit Dependencies
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc-multilib g++-multilib \
-            libstdc++6:i386 \
-            libc6-dev-i386 \
-            clang
+    - name: Checkout SourceMod SDKs
+      # 手动拉取 SDK，确保版本正确且路径清晰
+      run: |
+        mkdir -p sdks
+        cd sdks
+        # 拉取 SourceMod 1.12
+        git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod
+        # 拉取 Metamod Source 1.12
+        git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource
+        # 拉取 CS:GO SDK (分支必须是 csgo)
+        git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
 
-      # 🌟【保险步骤】手动拉取 SDK (防止你的 submodule 配置有误)
-      # 如果你确定你的仓库里 submodule 没问题，这步可以删掉
-      - name: Manual Checkout SDKs
-        run: |
-          mkdir sdks
-          cd sdks
-          git clone https://github.com/alliedmodders/sourcemod --recursive --branch master sourcemod
-          git clone https://github.com/alliedmodders/mmsource --recursive --branch master mmsource
-          git clone https://github.com/alliedmodders/hl2sdk-csgo --recursive --branch master hl2sdk-csgo
+    - name: Configure and Build
+      run: |
+        mkdir build && cd build
+        # 传递绝对路径，确保万无一失
+        python3 ../configure.py \
+          --enable-optimize \
+          --sdks=csgo \
+          --targets=x86 \
+          --sm-path="${{ github.workspace }}/sdks/sourcemod" \
+          --mms-path="${{ github.workspace }}/sdks/mmsource" \
+          --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-csgo"
+        
+        ambuild
 
-      - name: Compile
-        run: |
-          mkdir build
-          cd build
-          # 🌟 这里假设你用的是 AMBuild (configure.py)
-          # 我们显式指定 SDK 路径，确保万无一失
-          python3 ../extension/configure.py \
-            --enable-optimize \
-            --sdks=csgo \
-            --targets=x86 \
-            --sm-path=${{ github.workspace }}/sdks/sourcemod \
-            --mms-path=${{ github.workspace }}/sdks/mmsource \
-            --hl2sdk-root=${{ github.workspace }}/sdks
-          
-          ambuild
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: csgo-extension-linux
-          path: build/package/*.so
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: momsurffix_ext_linux
+        # 上传生成的 .so 文件
+        path: build/package/addons/sourcemod/extensions/momsurffix_ext.ext.so
