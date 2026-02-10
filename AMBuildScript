@@ -5,16 +5,15 @@ import os
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
 library = cxx.Library('momsurffix_ext.ext')
 
-# 2. 源文件
-# ❌❌❌ 绝对不要在这里加入 smsdk_ext.cpp ❌❌❌
-# 只要保留你自己的 .cpp 文件即可，SDK 头文件会自动处理链接逻辑
+# 2. 源文件 (✅ 包含 smsdk_ext.cpp 是完全正确的)
 sm_path = builder.options.sm_path
 library.sources += [
     'momsurffix_ext.cpp',
-    'simple_detour.cpp'
+    'simple_detour.cpp',
+    os.path.join(sm_path, 'public', 'smsdk_ext.cpp')
 ]
 
-# 3. 获取其他路径参数
+# 3. 获取其他路径参数 (❌ 移除 mms_path)
 hl2sdk_path = builder.options.hl2sdk_path
 
 # 4. 头文件包含路径
@@ -28,6 +27,7 @@ library.compiler.includes += [
     os.path.join(sm_path, 'public/amtl/amtl'),
     os.path.join(sm_path, 'third_party/amtl'),
     os.path.join(sm_path, 'third_party/amtl/amtl'),
+    # HL2SDK
     os.path.join(hl2sdk_path, 'public'),
     os.path.join(hl2sdk_path, 'public/engine'),
     os.path.join(hl2sdk_path, 'public/mathlib'),
@@ -72,13 +72,9 @@ library.compiler.cxxflags += [
 # 链接设置
 # =============================================================================
 
-# 1. 设置 SDK 库目录
 libdir = os.path.join(hl2sdk_path, 'lib', 'linux')
-
-# 2. 链接器标志
 library.compiler.linkflags += ['-lm', '-ldl', '-L' + libdir]
 
-# 3. 智能判断库名称
 name_tier0 = 'tier0'
 if os.path.exists(os.path.join(libdir, 'libtier0_srv.so')):
     name_tier0 = 'tier0_srv'
@@ -87,7 +83,6 @@ name_vstdlib = 'vstdlib'
 if os.path.exists(os.path.join(libdir, 'libvstdlib_srv.so')):
     name_vstdlib = 'vstdlib_srv'
 
-# 4. Postlink
 library.compiler.postlink += [
     os.path.join(libdir, 'tier1_i486.a'),
     os.path.join(libdir, 'mathlib_i486.a'),
