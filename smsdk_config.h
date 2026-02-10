@@ -29,6 +29,6 @@
 #define SMEXT_ENABLE_TRANSLATOR
 #define SMEXT_ENABLE_ROOTCONSOLEMENU
 
-#define SMEXT_CONF_METAMOD  // 启用 Metamod 支持
+// #define SMEXT_CONF_METAMOD  // 启用 Metamod 支持
 
 #endif
