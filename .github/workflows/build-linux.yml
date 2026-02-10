@@ -8,53 +8,55 @@ on:
 
 jobs:
   build:
-    # 【死因3修复】强制使用 Ubuntu 20.04
-    # 避免 GCC 版本过高 (11+) 导致的 SDK 语法错误 (CS:GO SDK 最好用 GCC 9 编译)
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        # 【死因2修复】必须递归拉取子模块
-        # 否则 SDK 里的 amtl 等依赖全是空文件夹，导致头文件找不到
         submodules: recursive
 
-    - name: Install 32-bit dependencies (Multilib)
-      # 【死因1修复】安装完整的 32 位编译环境
-      # 没有这些，编译器无法生成 32 位的 .so 文件，链接也会失败
+    - name: Install build dependencies (GCC 9 + 32bit)
       run: |
         sudo dpkg --add-architecture i386
         sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          gcc-multilib g++-multilib \
-          lib32stdc++6 lib32z1-dev libc6-dev-i386 \
-          python3 python3-pip clang
 
-    - name: Setup AMBuild
+        # 【关键修改1】直接安装 gcc-9-multilib 和 g++-9-multilib
+        # 这会自动处理好所有的 32 位依赖，比手动装 libc6-dev-i386 更稳
+        sudo apt-get install -y --no-install-recommends \
+          gcc-9-multilib g++-9-multilib \
+          make python3 python3-pip git ca-certificates
+
+        # 【关键修改2】强制将系统默认编译器指向 GCC 9
+        # 这样确保 AMBuild 绝对不会意外调用到 GCC 11
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 100
+        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 100
+        sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-9 100
+        sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-9 100
+
+        # 验证版本 (应该是 9.x)
+        gcc --version
+        g++ --version
+
+    - name: Install AMBuild
       run: |
-        git clone https://github.com/alliedmodders/ambuild
-        cd ambuild
-        python3 setup.py install --user
-        # 将用户 bin 目录加入 PATH，确保能找到 ambuild 命令
+        python3 -m pip install --user --upgrade pip
+        python3 -m pip install --user ambuild
         echo "$HOME/.local/bin" >> $GITHUB_PATH
 
     - name: Checkout SourceMod SDKs
-      # 手动拉取 SDK，确保版本正确且路径清晰
       run: |
         mkdir -p sdks
         cd sdks
-        # 拉取 SourceMod 1.12
         git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod
-        # 拉取 Metamod Source 1.12
         git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource
-        # 拉取 CS:GO SDK (分支必须是 csgo)
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
 
-    - name: Configure and Build
+    - name: Configure
       run: |
-        mkdir build && cd build
-        # 传递绝对路径，确保万无一失
+        mkdir build
+        cd build
+        # 不需要再手动指定 CC/CXX 了，因为系统默认已经改成了 GCC 9
         python3 ../configure.py \
           --enable-optimize \
           --sdks=csgo \
@@ -62,12 +64,14 @@ jobs:
           --sm-path="${{ github.workspace }}/sdks/sourcemod" \
           --mms-path="${{ github.workspace }}/sdks/mmsource" \
           --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-csgo"
-        
+
+    - name: Build
+      run: |
+        cd build
         ambuild
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: momsurffix_ext_linux
-        # 上传生成的 .so 文件
         path: build/package/addons/sourcemod/extensions/momsurffix_ext.ext.so
