@@ -16,27 +16,24 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Install build dependencies (GCC 9 + 32bit)
-      # 【核心修复】完全采纳你的建议，使用 multilib 包
-      # 同时加上 g++-9-multilib 确保 C++ 链接库也齐全
+    - name: Install build dependencies (GCC 9 + 32bit + Fixes)
       run: |
         sudo dpkg --add-architecture i386
         sudo apt-get update
         
-        # 1. 编译器 + 32位支持 (Multilib 是正解)
+        # 1. 安装编译器和 32 位支持
         sudo apt-get install -y --no-install-recommends \
           gcc-9 g++-9 \
-          gcc-9-multilib g++-9-multilib
-
-        # 2. 运行库 (SourceMod 依赖)
-        sudo apt-get install -y --no-install-recommends \
+          gcc-9-multilib g++-9-multilib \
           libc6-dev-i386 \
           lib32stdc++6 \
-          lib32z1-dev
-
-        # 3. 基础工具
-        sudo apt-get install -y --no-install-recommends \
+          lib32z1-dev \
           make python3 python3-pip git ca-certificates
+
+        # 2. 【绝杀修复】手动修复 asm 头文件路径
+        # Ubuntu 22.04 的 gcc-9-multilib 有时找不到 asm 目录，手动软链一下即可
+        # 这一步能解决 fatal error: asm/errno.h: No such file or directory
+        sudo ln -s /usr/include/x86_64-linux-gnu/asm /usr/include/asm || true
 
     - name: Install AMBuild
       run: |
@@ -54,23 +51,19 @@ jobs:
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
 
     - name: Configure
-      # 【核心修复】强制环境变量 CC/CXX
       env:
         CC: gcc-9
         CXX: g++-9
       run: |
-        # 1. 清理环境
         rm -rf build
-        
-        # 2. 【核心修复】使用 -o build 指定输出目录，彻底解决路径问题
+        # 这里的 -o build 和前面的环境变量配合，已经验证是没问题的
         python3 configure.py -o build \
           --sdks=csgo \
           --targets=x86 \
           --sm-path="${{ github.workspace }}/sdks/sourcemod" \
           --mms-path="${{ github.workspace }}/sdks/mmsource" \
           --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-csgo"
-          
-        # 3. 验证校验
+        
         test -f build/.ambuild2/vars
 
     - name: Build
@@ -78,7 +71,6 @@ jobs:
         CC: gcc-9
         CXX: g++-9
       run: |
-        # 【核心修复】直接调用 ambuild build，不 cd 进去
         ambuild build
 
     - name: Upload Artifact
