@@ -21,20 +21,26 @@
 #include <ihandleentity.h> 
 
 // ============================================================================
-// 【3】前置声明 (Forward Declarations) - ABI 安全的关键
+// 【3】关键类型处理 (Include Order Fix)
 // ============================================================================
-// ❌ 绝对不要在这里定义 class CBasePlayer { ... }，那是 ABI 炸弹
-// ✅ 只告诉编译器这些类型存在，不要让它关心具体布局
+
+// A. 类类型：使用前置声明 (Forward Declaration)
+// 我们只需要指针 (CBasePlayer*)，不需要完整定义，所以前置声明是安全的且必要的
 class CBasePlayer;
 class CBaseEntity;
-enum PLAYER_ANIM; 
+
+// B. 枚举类型：必须包含完整定义
+// PLAYER_ANIM 是枚举，必须引入定义它的头文件，不能前置声明
+// 在 CS:GO SDK 中，它通常位于 playeranimstate.h
+#include <playeranimstate.h>
 
 // ============================================================================
 // 【4】依赖上述类型的 SDK 头文件
 // ============================================================================
+// 此时编译器已经认识 CBasePlayer(类名) 和 PLAYER_ANIM(枚举)，可以安全包含以下文件
 #include <engine/IEngineTrace.h>
 #include <ispatialpartition.h> 
-#include <igamemovement.h> // 现在它看到了前置声明，可以通过编译
+#include <igamemovement.h>
 #include <tier0/vprof.h>
 #include "simple_detour.h"
 
@@ -81,7 +87,6 @@ static Vector g_TempPlanes[MAX_CLIP_PLANES];
 class CTraceFilterSimple : public ITraceFilter
 {
 public:
-    // 这里使用 IHandleEntity* 是安全的，因为它是基类接口
     CTraceFilterSimple(const IHandleEntity *passentity, int collisionGroup)
         : m_pPassEnt(passentity), m_collisionGroup(collisionGroup) {}
 
@@ -100,7 +105,6 @@ private:
     int m_collisionGroup;
 };
 
-// 修改：手动传入 pPlayerEntity，不再依赖 pGM->GetMovingPlayer()
 void Manual_TracePlayerBBox(IGameMovement *pGM, IHandleEntity *pPlayerEntity, const Vector &start, const Vector &end, unsigned int fMask, int collisionGroup, CGameTrace &pm)
 {
     if (!enginetrace) return;
@@ -111,14 +115,10 @@ void Manual_TracePlayerBBox(IGameMovement *pGM, IHandleEntity *pPlayerEntity, co
     Ray_t ray;
     ray.Init(start, end, mins, maxs);
 
-    // ❌ 删除：IHandleEntity *playerEntity = (IHandleEntity *)pGM->GetMovingPlayer();
-    // ✅ 使用传入的 pPlayerEntity
-    
     CTraceFilterSimple traceFilter(pPlayerEntity, collisionGroup);
     enginetrace->TraceRay(ray, fMask, &traceFilter, &pm);
 }
 
-// 修改：传入 IHandleEntity* 类型
 void FindValidPlane(IGameMovement *pGM, IHandleEntity *pPlayerEntity, const Vector &origin, const Vector &vel, Vector &outPlane)
 {
     if (!enginetrace) return;
@@ -139,7 +139,6 @@ void FindValidPlane(IGameMovement *pGM, IHandleEntity *pPlayerEntity, const Vect
                 Vector end = origin + (dir * 0.0625f);
 
                 CGameTrace trace;
-                // 使用传入的 pPlayerEntity
                 CTraceFilterSimple filter(pPlayerEntity, COLLISION_GROUP_PLAYER_MOVEMENT);
                 Ray_t ray;
                 ray.Init(origin, end);
@@ -180,8 +179,6 @@ typedef int (THISCALL *TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
 {
-    // pThis 是 IGameMovement 接口指针
-    // 通过 offset 获取 CBasePlayer 指针 (void*)
     void *pPlayer = *(void **)((uintptr_t)pThis + g_off_Player);
     CMoveData *mv = *(CMoveData **)((uintptr_t)pThis + g_off_MV);
 
@@ -189,15 +186,11 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 
     if (!pPlayer || !mv || !Original) return 0;
 
-    // 【安全操作】将 void* 强转为 IHandleEntity*
-    // 在 Source Engine 中，CBasePlayer 继承链包含 IHandleEntity，
-    // 这里我们假设指针地址对齐（通常扩展开发中都是这么做的），用于 TraceFilter 过滤自身
+    // 安全强转 void* -> IHandleEntity*
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
 
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
 
-    // 这里 GetRefEHandle() 是 IHandleEntity 的虚函数，需要确保 pEntity 指针正确
-    // 如果之前崩服，可能是 pPlayer 到 IHandleEntity 有偏移，但通常是一致的
     int client = pEntity->GetRefEHandle().GetEntryIndex();
     
     CGameTrace &pm = g_TempTraces[client];
@@ -237,7 +230,6 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
         }
         else
         {
-            // ✅ 传入 pEntity，不再调用 GetMovingPlayer
             Manual_TracePlayerBBox(pGM, pEntity, origin, end, MASK_PLAYERSOLID, COLLISION_GROUP_PLAYER_MOVEMENT, pm);
         }
 
@@ -265,7 +257,6 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 
         if (g_cvNoclipWorkaround.GetBool() && stuck_on_ramp && vel.z >= -6.25f && vel.z <= 0.0f && !has_valid_plane)
         {
-            // ✅ 传入 pEntity
             FindValidPlane(pGM, pEntity, origin, vel, valid_plane);
             has_valid_plane = (valid_plane.LengthSqr() > 0.000001f);
         }
@@ -319,8 +310,9 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     return blocked;
 }
 
-// ... 后续 SDK_OnLoad 等代码保持不变 ...
-// ... 请保留最后的 SDK_OnLoad / SDK_OnUnload 等实现 ...
+// ============================================================================
+// SourceMod 生命周期
+// ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
     char conf_error[255];
