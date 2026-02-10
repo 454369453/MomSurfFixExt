@@ -21,26 +21,35 @@
 #include <ihandleentity.h> 
 
 // ============================================================================
-// 【3】关键类型处理 (Include Order Fix)
+// 【3】SDK 兼容层 (关键修复)
 // ============================================================================
 
-// A. 类类型：使用前置声明 (Forward Declaration)
-// 我们只需要指针 (CBasePlayer*)，不需要完整定义，所以前置声明是安全的且必要的
+// A. 类类型：前置声明 (Forward Declaration)
+// 我们只需要指针 (CBasePlayer*)，不需要知道它的内部布局，所以前置声明是安全的
 class CBasePlayer;
 class CBaseEntity;
 
-// B. 枚举类型：必须包含完整定义
-// PLAYER_ANIM 是枚举，必须引入定义它的头文件，不能前置声明
-// 在 CS:GO SDK 中，它通常位于 playeranimstate.h
-#include <playeranimstate.h>
+// B. 枚举类型：手动定义 (Mock Definition)
+// ❌ 原代码引用的 playeranimstate.h 在 CS:GO SDK 中不存在
+// ✅ 我们手动定义这个枚举，仅为了欺骗编译器，让 imovehelper.h 能通过编译
+// 只要我们在代码里不调用 PlayerSetAnimation()（我们确实没调用），这就完全安全
+enum PLAYER_ANIM 
+{ 
+    PLAYER_IDLE = 0, 
+    PLAYER_WALK, 
+    PLAYER_JUMP,
+    PLAYER_SUPERJUMP,
+    PLAYER_DIE,
+    PLAYER_ATTACK1
+};
 
 // ============================================================================
 // 【4】依赖上述类型的 SDK 头文件
 // ============================================================================
-// 此时编译器已经认识 CBasePlayer(类名) 和 PLAYER_ANIM(枚举)，可以安全包含以下文件
 #include <engine/IEngineTrace.h>
 #include <ispatialpartition.h> 
-#include <igamemovement.h>
+// 此时 PLAYER_ANIM 已经定义，igamemovement.h 可以顺利解析了
+#include <igamemovement.h> 
 #include <tier0/vprof.h>
 #include "simple_detour.h"
 
@@ -105,6 +114,7 @@ private:
     int m_collisionGroup;
 };
 
+// 使用 IHandleEntity* 替代 CBasePlayer*，避开类型依赖
 void Manual_TracePlayerBBox(IGameMovement *pGM, IHandleEntity *pPlayerEntity, const Vector &start, const Vector &end, unsigned int fMask, int collisionGroup, CGameTrace &pm)
 {
     if (!enginetrace) return;
@@ -186,7 +196,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 
     if (!pPlayer || !mv || !Original) return 0;
 
-    // 安全强转 void* -> IHandleEntity*
+    // 强转为 IHandleEntity*，这在 Source Engine 中是约定俗成的安全操作
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
 
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
