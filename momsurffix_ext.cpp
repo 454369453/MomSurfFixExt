@@ -1,12 +1,13 @@
 // ============================================================================
-// 【第一区】标准库与内存兼容层 (The "Main Road")
+// 【第一区】标准库与底层兼容层
 // ============================================================================
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
-#include <stdlib.h> // POSIX 标准
+#include <stdlib.h> // posix_memalign 需要此头文件
 
-// 【核心实现】linux_aligned_malloc (正如你所说，这是最稳的)
+// 1. Linux 内存分配垫片 (核心稳定性保障)
+// 使用 posix_memalign 解决 aligned_alloc 对 size 的苛刻要求
 static inline void* linux_aligned_malloc(size_t size, size_t align)
 {
     void* ptr = nullptr;
@@ -15,11 +16,13 @@ static inline void* linux_aligned_malloc(size_t size, size_t align)
     return ptr;
 }
 
+// 2. 强制映射 Valve 的 Windows 风格函数
 #undef _aligned_malloc
 #undef _aligned_free
 #define _aligned_malloc(size, align) linux_aligned_malloc(size, align)
 #define _aligned_free free
 
+// 3. 基础兼容宏
 #ifndef abstract_class
     #define abstract_class class
 #endif
@@ -27,34 +30,72 @@ static inline void* linux_aligned_malloc(size_t size, size_t align)
     #define OVERRIDE override
 #endif
 
-// 这一段我们不动了，这是 CSGO Legacy + Linux + SM 扩展 的唯一稳态组合
-// 接受 SourceMod/Tier0 的内存接管
-// #define NO_MALLOC_OVERRIDE  <-- 已删除
-// #define NO_HOOK_MALLOC      <-- 已删除
+// ============================================================================
+// 【第二区】SDK 预处理干预 (关键步骤)
+// ============================================================================
+
+// 【核心步骤 1】在包含 memalloc.h 之前，先定义 NO_MALLOC_OVERRIDE
+// 这告诉 SDK：不要接管全局 new/delete，也不要定义冲突的内联函数
+#define NO_MALLOC_OVERRIDE
+#define NO_HOOK_MALLOC
 
 // ============================================================================
-// 【第二区】SDK 核心头文件
+// 【第三区】引入 SDK 头文件
 // ============================================================================
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 
-// 补充 SDK 可能缺失的内联函数，全部指向我们的安全实现
-#ifndef MemAlloc_AllocAlignedFileLine
-    #define MemAlloc_AllocAlignedFileLine(size, align, file, line) \
-        g_pMemAlloc->AllocAligned(size, align, file, line)
+// ============================================================================
+// 【第四区】宏清理与函数补全 (决胜局)
+// ============================================================================
+
+// 【核心步骤 2】强制干掉 memalloc.h 可能定义的宏
+// 这一步必须做！防止 vector.h 使用 SDK 默认的 g_pMemAlloc->AllocAligned 宏
+#ifdef MemAlloc_AllocAligned
+    #undef MemAlloc_AllocAligned
+#endif
+#ifdef MemAlloc_AllocAlignedFileLine
+    #undef MemAlloc_AllocAlignedFileLine
+#endif
+#ifdef MemAlloc_FreeAligned
+    #undef MemAlloc_FreeAligned
 #endif
 
+// 【核心步骤 3】手动补全 inline 函数
+// 这样 vector.h 就会调用我们的安全实现，而不是错误的宏展开
+inline void *MemAlloc_AllocAligned(size_t size, size_t align)
+{
+    return linux_aligned_malloc(size, align);
+}
+
+inline void *MemAlloc_AllocAlignedFileLine(size_t size, size_t align, const char *pszFile, int nLine)
+{
+    return linux_aligned_malloc(size, align);
+}
+
+inline void MemAlloc_FreeAligned(void *pMemBlock)
+{
+    free(pMemBlock);
+}
+
+inline void MemAlloc_FreeAligned(void *pMemBlock, const char *pszFile, int nLine)
+{
+    free(pMemBlock);
+}
+
+// 补全工具宏
 #ifndef MEM_ALLOC_CREDIT_CLASS
     #define MEM_ALLOC_CREDIT_CLASS()
 #endif
 
 // ============================================================================
-// 【第三区】SourceMod 扩展入口
+// 【第五区】SourceMod 扩展入口
 // ============================================================================
+// 此时引入 extension.h，它链入 vector.h 时会看到我们正确的 inline 函数
 #include "extension.h"
 
 // ============================================================================
-// 【第四区】业务逻辑头文件
+// 【第六区】业务逻辑头文件
 // ============================================================================
 #include <ihandleentity.h>
 
@@ -74,7 +115,7 @@ enum PLAYER_ANIM {
 #include "simple_detour.h"
 
 // ============================================================================
-// 全局变量
+// 全局变量 & 业务逻辑
 // ============================================================================
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
@@ -193,16 +234,10 @@ bool IsValidMovementTrace(const CGameTrace &tr)
     return (tr.fraction > 0.0f || tr.startsolid);
 }
 
-// ============================================================================
-// Detour 函数 - 【ABI 修正区】
-// ============================================================================
-// 【修正】增加 THISCALL 宏，确保调用约定与引擎一致 (虽然 Linux 下通常为空，但语义必须对齐)
-// 防止 SourceMod 未来更新头文件导致 ABI 错位
+// Detour 函数 - 【ABI 修正】
 #ifndef THISCALL
     #define THISCALL
 #endif
-
-// 定义原始函数指针，加上 THISCALL
 typedef int (THISCALL *TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
@@ -212,33 +247,26 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
 
-    // 如果环境没准备好，直接回退原版
     if (!pPlayer || !mv || !Original) return 0;
 
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
 
-    // 【逻辑修正】如果速度极小，直接调用原版逻辑，并返回其结果
-    // 这样能保留引擎原生的静止/卡住判定
-    Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
-    Vector vel = *pVel; 
-
-    if (vel.LengthSqr() < 0.000001f)
-    {
-        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft); 
-    }
-
-    // --- 开始接管移动逻辑 (Momentum Loop) ---
-    // 注意：这里我们完全替代了原版循环，因为原版循环无法修复 Ramp Bug
-    // 所以我们无法 "return result | blocked"，因为我们根本没跑 Original
-    
     int client = ((IHandleEntity *)pPlayer)->GetRefEHandle().GetEntryIndex();
     
     CGameTrace &pm = g_TempTraces[client];
     pm = CGameTrace(); 
 
+    Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
+    Vector vel = *pVel; 
+
     Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
     Vector origin = *pOrigin;
     
+    if (vel.LengthSqr() < 0.000001f)
+    {
+        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft); 
+    }
+
     float time_left = flTimeLeft;
     int numbumps = g_cvRampBumpCount.GetInt();
     int numplanes = 0;
