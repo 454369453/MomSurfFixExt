@@ -5,18 +5,17 @@ import os
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
 library = cxx.Library('momsurffix_ext.ext')
 
-# 2. 源文件 (修复点在此)
+# 2. 源文件
 # 我们需要把 SourceMod SDK 自带的 smsdk_ext.cpp 加进来
-# 否则会出现 undefined symbol: SDKExtension::Load
 sm_path = builder.options.sm_path
 library.sources += [
     'momsurffix_ext.cpp',
     'simple_detour.cpp',
-    os.path.join(sm_path, 'public', 'smsdk_ext.cpp')  # <--- 关键修复：加入 SDK 核心实现
+    os.path.join(sm_path, 'public', 'smsdk_ext.cpp')
 ]
 
 # 3. 获取其他路径参数
-mms_path = builder.options.mms_path
+# ❌ 删除 mms_path = builder.options.mms_path (不需要 Metamod)
 hl2sdk_path = builder.options.hl2sdk_path
 
 # 4. 头文件包含路径
@@ -30,8 +29,7 @@ library.compiler.includes += [
     os.path.join(sm_path, 'public/amtl/amtl'),
     os.path.join(sm_path, 'third_party/amtl'),
     os.path.join(sm_path, 'third_party/amtl/amtl'),
-    os.path.join(mms_path, 'core'),
-    os.path.join(mms_path, 'core/sourcehook'),
+    # ❌ 删除了所有 os.path.join(mms_path, ...) 的行
     os.path.join(hl2sdk_path, 'public'),
     os.path.join(hl2sdk_path, 'public/engine'),
     os.path.join(hl2sdk_path, 'public/mathlib'),
@@ -73,17 +71,16 @@ library.compiler.cxxflags += [
 ]
 
 # =============================================================================
-# 【终极修复】正确链接 CS:GO Legacy (32-bit) 的 tier0 和 vstdlib
-# 解决 "cannot open shared object file" (硬编码路径) 问题
+# 链接设置
 # =============================================================================
 
 # 1. 设置 SDK 库目录
 libdir = os.path.join(hl2sdk_path, 'lib', 'linux')
 
-# 2. 关键：告诉链接器去 libdir 找库 (-L)
+# 2. 链接器标志
 library.compiler.linkflags += ['-lm', '-ldl', '-L' + libdir]
 
-# 3. 智能判断库名称 (tier0_srv 优先)
+# 3. 智能判断库名称
 name_tier0 = 'tier0'
 if os.path.exists(os.path.join(libdir, 'libtier0_srv.so')):
     name_tier0 = 'tier0_srv'
@@ -97,8 +94,8 @@ library.compiler.postlink += [
     os.path.join(libdir, 'tier1_i486.a'),
     os.path.join(libdir, 'mathlib_i486.a'),
     os.path.join(libdir, 'interfaces_i486.a'),
-    '-l' + name_tier0,    # -ltier0_srv
-    '-l' + name_vstdlib,  # -lvstdlib_srv
+    '-l' + name_tier0,
+    '-l' + name_vstdlib,
 ]
 
 builder.Add(library)
