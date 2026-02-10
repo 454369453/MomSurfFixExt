@@ -62,7 +62,7 @@ library.compiler.cxxflags += [
     '-Wno-invalid-offsetof',
 ]
 
-library.compiler.linkflags += ['-m32', '-lm', '-ldl']
+library.compiler.linkflags += ['-lm', '-ldl']
 
 library.compiler.postlink += [
     os.path.join(hl2sdk_path, 'lib/linux/tier1_i486.a'),
