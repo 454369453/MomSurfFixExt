@@ -1,79 +1,27 @@
 // ============================================================================
-// 【第一区】系统环境重构 (必须置顶)
+// 【第一区】标准库
 // ============================================================================
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
 
-// 1. 内存函数映射
-#undef _aligned_malloc
-#undef _aligned_free
-#define _aligned_malloc(size, align) aligned_alloc(align, size)
-#define _aligned_free free
-
-// 2. 关键宏定义
-#ifndef abstract_class
-    #define abstract_class class
-#endif
-#ifndef PLATFORM_INTERFACE
-    #define PLATFORM_INTERFACE extern "C"
-#endif
-#ifndef OVERRIDE
-    #define OVERRIDE override
-#endif
-
 // ============================================================================
-// 【第二区】完整伪造 SDK 内存管理层
+// 【第二区】SDK 核心头文件 (标准模式)
 // ============================================================================
-// 定义 TIER0_MEMALLOC_H 宏，欺骗编译器跳过官方坏掉的 memalloc.h
-#ifndef TIER0_MEMALLOC_H
-#define TIER0_MEMALLOC_H
+// ❌ 移除 METAMOD 标志，回归标准 SourceMod 扩展模式
+// #define SMEXT_CONF_METAMOD
 
+// 引入 SDK 头文件
 #include <tier0/platform.h>
-
-// 1. 手动定义 IMemAlloc 接口
-abstract_class IMemAlloc
-{
-public:
-    virtual void *Alloc(size_t nSize, const char *pFileName = 0, int nLine = 0) = 0;
-    virtual void *Realloc(void *pMem, size_t nSize, const char *pFileName = 0, int nLine = 0) = 0;
-    virtual void Free(void *pMem, const char *pFileName = 0, int nLine = 0) = 0;
-    virtual void *Expand_NoLongerSupported(void *pMem, size_t nSize, const char *pFileName = 0, int nLine = 0) = 0;
-    virtual void *Alloc(size_t nSize) = 0;
-    virtual void Free(void *pMem) = 0;
-};
-
-// 2. 显式声明全局变量
-extern IMemAlloc *g_pMemAlloc;
-
-// 3. 补全 vector.h 依赖的辅助函数
-inline void *MemAlloc_AllocAligned(size_t size, size_t align) 
-{ 
-    return aligned_alloc(align, size); 
-}
-
-inline void MemAlloc_FreeAligned(void *p, const char *pFileName = nullptr, int nLine = 0) 
-{ 
-    free(p); 
-}
-
-// 4. 补全宏
-#define MEM_ALLOC_CREDIT_CLASS()
-#define MemAlloc_AllocAlignedFileLine(size, align, file, line) aligned_alloc(align, size)
-
-#endif // TIER0_MEMALLOC_H
-
-// ============================================================================
-// 【第三区】SourceMod 扩展入口
-// ============================================================================
+#include <tier0/memalloc.h>
 #include "extension.h"
+#include "smsdk_config.h"
 
 // ============================================================================
-// 【第四区】业务逻辑头文件
+// 【第三区】业务逻辑头文件
 // ============================================================================
 #include <ihandleentity.h>
 
-// 假类定义
 class CBaseEntity : public IHandleEntity {};
 class CBasePlayer : public CBaseEntity {};
 
@@ -85,8 +33,6 @@ enum PLAYER_ANIM {
 #include <ispatialpartition.h> 
 #include <igamemovement.h>
 #include <tier0/vprof.h>
-
-#include "smsdk_config.h"
 #include "simple_detour.h"
 
 // ============================================================================
@@ -120,9 +66,7 @@ CSimpleDetour *g_pDetour = nullptr;
 static CGameTrace g_TempTraces[MAXPLAYERS + 1];
 static Vector g_TempPlanes[MAX_CLIP_PLANES];
 
-// ============================================================================
 // 辅助类
-// ============================================================================
 class CTraceFilterSimple : public ITraceFilter
 {
 public:
@@ -144,9 +88,7 @@ private:
     int m_collisionGroup;
 };
 
-// ============================================================================
-// 逻辑函数
-// ============================================================================
+// 业务逻辑函数
 void Manual_TracePlayerBBox(IGameMovement *pGM, const Vector &start, const Vector &end, unsigned int fMask, int collisionGroup, CGameTrace &pm)
 {
     if (!enginetrace) return;
@@ -213,10 +155,12 @@ bool IsValidMovementTrace(const CGameTrace &tr)
     return (tr.fraction > 0.0f || tr.startsolid);
 }
 
-// ============================================================================
 // Detour 函数
-// ============================================================================
-typedef int (*TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
+// 加上 THISCALL 防止 ABI 报错
+#ifndef THISCALL
+    #define THISCALL
+#endif
+typedef int (THISCALL *TryPlayerMove_t)(void *, Vector *, CGameTrace *, float);
 
 int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrace, float flTimeLeft)
 {
@@ -225,10 +169,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
 
-    if (!pPlayer || !mv || !Original)
-    {
-        return 0;
-    }
+    if (!pPlayer || !mv || !Original) return 0;
 
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
 
@@ -274,11 +215,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
             Manual_TracePlayerBBox(pGM, origin, end, MASK_PLAYERSOLID, COLLISION_GROUP_PLAYER_MOVEMENT, pm);
         }
 
-        if (pm.fraction > 0.0f)
-        {
-            origin = pm.endpos;
-        }
-
+        if (pm.fraction > 0.0f) origin = pm.endpos;
         if (pm.fraction == 1.0f) break;
 
         time_left -= time_left * pm.fraction;
@@ -335,9 +272,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
             else
             {
                 float dot = DotProduct(new_vel, new_vel);
-                if (dot > 0.0f)
-                    new_vel *= (vel.Length() / sqrt(dot));
-
+                if (dot > 0.0f) new_vel *= (vel.Length() / sqrt(dot));
                 vel = new_vel;
             }
 
@@ -375,14 +310,14 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         !conf->GetOffset("CMoveData::m_vecVelocity", &g_off_VecVelocity) ||
         !conf->GetOffset("CMoveData::m_vecAbsOrigin", &g_off_VecAbsOrigin))
     {
-        snprintf(error, maxlength, "Failed to get core offsets from gamedata.");
+        snprintf(error, maxlength, "Failed to get core offsets.");
         gameconfs->CloseGameConfigFile(conf);
         return false;
     }
 
     if (!conf->GetOffset("CBasePlayer::m_hGroundEntity", &g_off_GroundEntity))
     {
-         snprintf(error, maxlength, "Missing 'CBasePlayer::m_hGroundEntity' in gamedata.");
+         snprintf(error, maxlength, "Missing 'CBasePlayer::m_hGroundEntity'.");
          gameconfs->CloseGameConfigFile(conf);
          return false;
     }
@@ -390,7 +325,7 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
     void *pTryPlayerMoveAddr = nullptr;
     if (!conf->GetMemSig("CGameMovement::TryPlayerMove", &pTryPlayerMoveAddr) || !pTryPlayerMoveAddr)
     {
-        snprintf(error, maxlength, "Failed to find signature for TryPlayerMove.");
+        snprintf(error, maxlength, "Failed to find TryPlayerMove signature.");
         gameconfs->CloseGameConfigFile(conf);
         return false;
     }
@@ -405,7 +340,6 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 获取 Trace 接口
     void *pCreateInterface = nullptr;
     if (conf->GetMemSig("CreateInterface", &pCreateInterface) && pCreateInterface)
     {
@@ -441,5 +375,3 @@ bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
 {
     return true;
 }
-
-SMEXT_LINK(&g_MomSurfFixExt);
