@@ -1,25 +1,55 @@
 // ============================================================================
-// 【第一区】标准库
+// 【第一区】环境配置与标准库
 // ============================================================================
+// 【绝杀修复】强制定义 METAMOD 标志，确保 SMEXT_LINK 宏被正确生成
+#define SMEXT_CONF_METAMOD
+
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <cstdio>  // 新增：用于 Warning/Msg 的 printf/vsnprintf
+#include <cstdarg> // 新增：用于 va_list
 
 // ============================================================================
-// 【第二区】SDK 核心头文件 (极简模式)
+// 【第二区】底层内存垫片
 // ============================================================================
-// 1. 定义 METAMOD 标志，确保 SDK 知道我们要什么
-#define SMEXT_CONF_METAMOD
+// 1. Linux 内存分配垫片 (核心)
+// 使用 posix_memalign 替代 aligned_alloc，消除对 size 的苛刻限制
+static inline void* linux_aligned_malloc(size_t size, size_t align)
+{
+    void* ptr = nullptr;
+    if (posix_memalign(&ptr, align, size) != 0)
+        return nullptr;
+    return ptr;
+}
 
-// 2. 引入 SDK 头文件
-// 让 SDK 全权处理内存管理，我们不再手动补丁，防止重定义
+// 2. 宏映射
+// 这一步至关重要：让 SDK 内部调用的 _aligned_malloc 指向我们的实现
+#undef _aligned_malloc
+#undef _aligned_free
+#define _aligned_malloc(size, align) linux_aligned_malloc(size, align)
+#define _aligned_free free
+
+// 3. 基础兼容宏
+#ifndef abstract_class
+    #define abstract_class class
+#endif
+#ifndef OVERRIDE
+    #define OVERRIDE override
+#endif
+
+// ============================================================================
+// 【第三区】SDK 核心头文件
+// ============================================================================
+// SourceMod 环境下，直接包含这些头文件，让 SDK 处理内存
+// 我们不再定义 NO_MALLOC_OVERRIDE，也不再手写 MemAlloc_* 函数，防止重定义
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 #include "extension.h"
 #include "smsdk_config.h"
 
 // ============================================================================
-// 【第三区】业务逻辑头文件
+// 【第四区】业务逻辑头文件
 // ============================================================================
 #include <ihandleentity.h>
 
@@ -157,7 +187,6 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 }
 
 // Detour 函数
-// 加上 THISCALL 防止 ABI 报错
 #ifndef THISCALL
     #define THISCALL
 #endif
@@ -378,19 +407,37 @@ bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
 }
 
 // ============================================================================
-// 【绝杀修复】手动展开 SMEXT_LINK 宏
+// 【第五区】Tier0 符号垫片 (关键修复)
 // ============================================================================
-// 既然宏 SMEXT_LINK 总是报错，我们直接手写它背后的代码。
-// 这确保了编译器绝对能看懂，没有任何宏魔法。
-// 这里的 GetSmmAPI 是 Metamod 用来加载插件的标准入口。
+// 解决 "undefined symbol: Warning" 运行时错误
+// 我们手动实现这些函数，把日志转发给 SourceMod
 
-#if defined __WIN32__ || defined _WIN32
-    #define DLLEXPORT __declspec(dllexport)
-#else
-    #define DLLEXPORT __attribute__((visibility("default")))
-#endif
-
-extern "C" DLLEXPORT void *GetSmmAPI()
+extern "C" void Warning(const char *pMsg, ...)
 {
-    return (void *)&g_MomSurfFixExt;
+    va_list ap;
+    va_start(ap, pMsg);
+    char buffer[2048];
+    vsnprintf(buffer, sizeof(buffer), pMsg, ap);
+    va_end(ap);
+
+    if (smutils)
+        smutils->LogError("[MomSurfFix] %s", buffer);
+    else
+        printf("[MomSurfFix] %s", buffer);
 }
+
+extern "C" void Msg(const char *pMsg, ...)
+{
+    va_list ap;
+    va_start(ap, pMsg);
+    char buffer[2048];
+    vsnprintf(buffer, sizeof(buffer), pMsg, ap);
+    va_end(ap);
+
+    if (smutils)
+        smutils->LogMessage("[MomSurfFix] %s", buffer);
+    else
+        printf("[MomSurfFix] %s", buffer);
+}
+
+SMEXT_LINK(&g_MomSurfFixExt);
