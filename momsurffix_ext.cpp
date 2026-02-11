@@ -52,10 +52,16 @@ enum PLAYER_ANIM
 #endif
 
 MomSurfFixExt g_MomSurfFixExt;
+
+// 关键：定义全局接口指针，供 SDK 自动生成的入口使用
+// 因为 AMBuildScript 中包含了 smsdk_ext.cpp，它会自动生成 GetSMExtAPI
 SDKExtension *g_pExtensionIface = &g_MomSurfFixExt;
 
 IEngineTrace *enginetrace = nullptr;
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
+
+// 前向声明回调
+void OnEnableChanged(IConVar *var, const char *pOldValue, float flOldValue);
 
 // ConVar 定义
 ConVar g_cvEnable("momsurffix_enable", "1", 0, "Enable Surf Bug Fix", OnEnableChanged);
@@ -131,7 +137,7 @@ void TracePlayerBBox(const Vector &start, const Vector &end, IHandleEntity *pPla
 }
 
 // ----------------------------------------------------------------------------
-// Detour Logic (最终版：动量保持 + 无顿挫)
+// Detour Logic (安全版：只修复卡顿，不乱改物理)
 // ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
@@ -142,6 +148,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 {
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
     
+    // 双重保险：如果没开或者是空的，直接跑原版
     if (!Original || !g_cvEnable.GetBool()) 
     {
         return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
@@ -154,71 +161,57 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
     Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
 
-    // 1. 记录【移动前】的状态
+    // 1. 记录原始状态
     Vector preVelocity = *pVel;
     Vector preOrigin = *pOrigin;
     float preSpeedSq = preVelocity.LengthSqr();
 
-    // 2. 先让原版引擎跑
+    // 2. 运行原版引擎 (完全信任原版物理)
     int result = Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
 
-    // 3. 检查是否需要修复
+    // 3. 检查是否需要修复 (Ramp Bug 检测)
+    
+    // 条件 A: 速度必须足够快 (滑翔中)
     if (preSpeedSq < 250.0f * 250.0f) return result;
 
+    // 条件 B: 必须在空中
     unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
     if (hGroundEntity != 0xFFFFFFFF) return result;
 
-    // 只要掉了速就检查
+    // 条件 C: 速度发生了非自然损失 (撞坡 BUG)
     float postSpeedSq = pVel->LengthSqr();
-    if (postSpeedSq > preSpeedSq * 0.99f) return result; 
+    // 如果速度保持在 90% 以上，说明没出 BUG，不需要修
+    if (postSpeedSq > preSpeedSq * 0.9f) return result;
 
     // 4. 执行修复
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
     CGameTrace trace;
     
-    // 重新探测
+    // 重新探测前方，看看是不是撞到了斜坡
     Vector endPos = preOrigin + (preVelocity * flTimeLeft);
     TracePlayerBBox(preOrigin, endPos, pEntity, COLLISION_GROUP_PLAYER_MOVEMENT, trace);
 
     if (trace.DidHit() && trace.plane.normal.z < 0.7f)
     {
+        // 计算修正后的速度 (标准 ClipVelocity，不进行能量放大)
         float backoff = DotProduct(preVelocity, trace.plane.normal);
         
-        // 只有当是“撞向”墙壁时才修复
+        // 只有当实际上是撞向墙面时才修复
         if (backoff < 0.0f)
         {
-            // A. 计算滑行方向
             Vector fixVel = preVelocity - (trace.plane.normal * backoff);
 
-            // B. 【动量保持】把撞掉的速度补回来
-            float originalSpeed = sqrt(preSpeedSq);
-            float newSpeed = fixVel.Length();
+            // 【关键安全限制】防止飞天
+            // 限制最大垂直速度，避免被物理引擎弹射到天花板
+            if (fixVel.z > 600.0f) fixVel.z = 600.0f;
+            if (fixVel.z < -600.0f) fixVel.z = -600.0f;
 
-            if (newSpeed > 0.1f)
-            {
-                float scale = originalSpeed / newSpeed;
-                Vector boostedVel = fixVel * scale;
-
-                // C. 【安全锁】防止垂直飞天
-                if (boostedVel.z < 800.0f && boostedVel.z > -800.0f)
-                {
-                    fixVel = boostedVel; // 安全，应用加速
-                }
-                else
-                {
-                    // 不安全，只修正方向，不补速度
-                    if (g_cvDebug.GetBool()) Msg("[MomSurfFix] Safety clamp triggered (Z-Velocity too high)\n");
-                }
-            }
-
-            // D. 应用最终速度
+            // 应用修复
             *pVel = fixVel;
             
-            // E. 【消除顿挫】移除位置修正
-            // 移除下面这行代码是消除“顿挫感”的关键。
-            // 我们只修正速度，让引擎自然的去处理下一帧的位置，这样画面最丝滑。
-            // if (trace.plane.normal.z > 0.0f) 
-            //      *pOrigin = trace.endpos + (trace.plane.normal * 0.1f);
+            // 防卡住微调 (Noclip Workaround)
+            if (trace.plane.normal.z > 0.0f) 
+                 *pOrigin = trace.endpos + (trace.plane.normal * 0.1f);
 
             if (g_cvDebug.GetBool())
                 Msg("[MomSurfFix] FIXED! Speed: %.0f -> %.0f\n", sqrt(preSpeedSq), fixVel.Length());
@@ -241,22 +234,17 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 诊断式 Offset 获取
-    const char *missingKey = nullptr;
-
-    if (!conf->GetOffset("CGameMovement::player", &g_off_Player)) missingKey = "CGameMovement::player";
-    else if (!conf->GetOffset("CGameMovement::mv", &g_off_MV)) missingKey = "CGameMovement::mv";
-    else if (!conf->GetOffset("CMoveData::m_vecVelocity", &g_off_VecVelocity)) missingKey = "CMoveData::m_vecVelocity";
-    else if (!conf->GetOffset("CMoveData::m_vecAbsOrigin", &g_off_VecAbsOrigin)) missingKey = "CMoveData::m_vecAbsOrigin";
-
-    if (missingKey)
+    if (!conf->GetOffset("CGameMovement::player", &g_off_Player) ||
+        !conf->GetOffset("CGameMovement::mv", &g_off_MV) ||
+        !conf->GetOffset("CMoveData::m_vecVelocity", &g_off_VecVelocity) ||
+        !conf->GetOffset("CMoveData::m_vecAbsOrigin", &g_off_VecAbsOrigin))
     {
-        snprintf(error, maxlength, "Failed to get offset: %s (Check gamedata OFFSETS section!)", missingKey);
+        snprintf(error, maxlength, "Failed to get core offsets.");
         gameconfs->CloseGameConfigFile(conf);
         return false;
     }
 
-    // 智能获取 m_hGroundEntity
+    // 智能获取 m_hGroundEntity 偏移，防止 gamedata 过期
     sm_sendprop_info_t info;
     if (gamehelpers->FindSendPropInfo("CBasePlayer", "m_hGroundEntity", &info))
     {
@@ -297,7 +285,7 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    // 手动注册 ConVar
+    // 手动注册参数
     void *hVStdLib = dlopen("libvstdlib_srv.so", RTLD_NOW | RTLD_NOLOAD);
     if (!hVStdLib) hVStdLib = dlopen("libvstdlib.so", RTLD_NOW | RTLD_NOLOAD);
     
