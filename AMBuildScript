@@ -9,9 +9,8 @@ library = cxx.Library('momsurffix_ext.ext')
 sm_path = builder.options.sm_path
 library.sources += [
     'momsurffix_ext.cpp',
-    'simple_detour.cpp'
-    # ❌ 彻底删除下面这一行！我们不需要它了，因为它总是和你的代码冲突
-    # os.path.join(sm_path, 'public', 'smsdk_ext.cpp')
+    'simple_detour.cpp',
+    os.path.join(sm_path, 'public', 'smsdk_ext.cpp')
 ]
 
 # 3. 获取其他路径参数 (无 Metamod)
