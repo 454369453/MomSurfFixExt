@@ -72,7 +72,6 @@ int g_off_MV = -1;
 int g_off_VecVelocity = -1; 
 int g_off_VecAbsOrigin = -1;
 int g_off_GroundEntity = -1;
-// 【新增】碰撞箱大小偏移量
 int g_off_VecMins = -1;
 int g_off_VecMaxs = -1;
 
@@ -126,16 +125,13 @@ private:
     int m_collisionGroup;
 };
 
-// 【修改】TracePlayerBBox 现在需要传入 pPlayer 指针来读取实时大小
 void TracePlayerBBox(const Vector &start, const Vector &end, void *pPlayer, IHandleEntity *pPlayerEntity, int collisionGroup, CGameTrace &pm)
 {
     if (!enginetrace) return;
     
     Ray_t ray;
-    
-    // 【关键修复】动态获取玩家当前的碰撞箱大小 (Mins/Maxs)
-    // 解决了在狭窄空间（蹲下时）使用站立高度(72)进行检测导致误判卡墙的问题
     Vector mins, maxs;
+    
     if (g_off_VecMins != -1 && g_off_VecMaxs != -1)
     {
         mins = *(Vector *)((uintptr_t)pPlayer + g_off_VecMins);
@@ -143,7 +139,6 @@ void TracePlayerBBox(const Vector &start, const Vector &end, void *pPlayer, IHan
     }
     else
     {
-        // 降级方案 (不应该发生，除非 offsets 获取失败)
         mins = Vector(-16, -16, 0);
         maxs = Vector(16, 16, 72); 
     }
@@ -155,7 +150,7 @@ void TracePlayerBBox(const Vector &start, const Vector &end, void *pPlayer, IHan
 }
 
 // ----------------------------------------------------------------------------
-// Detour Logic (全能修复版 + 狭窄空间适配)
+// Detour Logic (智能判断版：Surf无感出坡 + Bhop正常起跳)
 // ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
@@ -166,7 +161,6 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 {
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
     
-    // 双重保险
     if (!Original || !g_cvEnable.GetBool()) 
     {
         return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
@@ -184,7 +178,6 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     Vector preOrigin = *pOrigin;
     float preSpeedSq = preVelocity.LengthSqr();
     
-    // 记录 GroundEntity
     unsigned long *pGroundEntity = (unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
     unsigned long hGroundEntityPre = *pGroundEntity;
 
@@ -192,35 +185,40 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     int result = Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
 
     // ========================================================================
-    // 消除落地视觉震动 (Anti-Landing-Punch Fix)
+    // 【智能落地优化】Smart Anti-Landing-Punch
     // ========================================================================
-    unsigned long hGroundEntityPost = *pGroundEntity;
+    // 目的：区分"Surf滑出坡"和"Bhop跳落地"
+    // 逻辑：如果刚落地，且垂直速度很小(<100)，说明是滑行切出，强制滞空以消除震动。
+    //       如果垂直速度大(>100)，说明是跳跃落地，保留落地状态以便起跳。
     
-    if (preSpeedSq > 250.0f * 250.0f && hGroundEntityPre == 0xFFFFFFFF && hGroundEntityPost != 0xFFFFFFFF)
+    unsigned long hGroundEntityPost = *pGroundEntity;
+
+    // 检查：刚落地 + 速度快(Surf状态)
+    if (hGroundEntityPre == 0xFFFFFFFF && hGroundEntityPost != 0xFFFFFFFF && preSpeedSq > 250.0f * 250.0f)
     {
-        *pGroundEntity = 0xFFFFFFFF;
+        // 检查垂直速度 (绝对值)
+        // Bhop落地通常 > 300 (800重力下起跳落地)
+        // Surf出坡通常 < 50
+        if (std::abs(pVel->z) < 100.0f)
+        {
+             // 判定为 Surf 平滑出坡 -> 强制滞空，消除顿挫
+             *pGroundEntity = 0xFFFFFFFF;
+        }
     }
 
     // ========================================================================
-    // 撞坡修复逻辑
+    // 撞坡修复逻辑 (Ramp Fix)
     // ========================================================================
 
-    // 条件 A: 速度必须足够快
     if (preSpeedSq < 250.0f * 250.0f) return result;
 
-    // 条件 C: 速度发生了非自然损失
     float postSpeedSq = pVel->LengthSqr();
-    
-    // 灵敏度 0.97
     if (postSpeedSq > preSpeedSq * 0.97f) return result;
 
-    // 4. 执行修复
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
     CGameTrace trace;
     
     Vector endPos = preOrigin + (preVelocity * flTimeLeft);
-    
-    // 【修改】传入 pPlayer 指针以获取动态大小
     TracePlayerBBox(preOrigin, endPos, pPlayer, pEntity, COLLISION_GROUP_PLAYER_MOVEMENT, trace);
 
     if (trace.DidHit() && trace.plane.normal.z < 0.7f)
@@ -231,17 +229,14 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
         {
             Vector fixVel = preVelocity - (trace.plane.normal * backoff);
 
-            // 【手感核心优化】微小位置修正 (Anti-Stutter)
             if (trace.plane.normal.z > 0.0f) 
             {
-                 // 1. 保留 0.01 的微小位置修正
                  *pOrigin = trace.endpos + (trace.plane.normal * 0.01f);
             }
 
-            // 应用修复速度
             *pVel = fixVel;
             
-            // 双重保险：修复过程也强制置空 GroundEntity
+            // 撞坡修复时，强制滞空 (防止Bug导致的震动)
             *pGroundEntity = 0xFFFFFFFF;
             
             if (g_cvDebug.GetBool())
@@ -253,7 +248,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 }
 
 // ----------------------------------------------------------------------------
-// SDK 生命周期
+// SDK 生命周期 (保持不变)
 // ----------------------------------------------------------------------------
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
@@ -290,8 +285,6 @@ bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
         }
     }
 
-    // 【新增】自动获取碰撞箱大小的偏移量 (m_vecMins / m_vecMaxs)
-    // 这样不需要修改 games.txt 也能自动适配
     if (gamehelpers->FindSendPropInfo("CBasePlayer", "m_vecMins", &info))
     {
         g_off_VecMins = info.actual_offset;
