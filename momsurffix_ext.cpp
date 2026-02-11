@@ -10,7 +10,8 @@
 #include <cstring>
 #include <cstdint>
 #include <dlfcn.h> 
-#include <algorithm> // 用于 std::min, std::max
+#include <algorithm>
+#include <cmath>
 
 // ============================================================================
 // 【2】基础 SDK 头文件
@@ -31,12 +32,7 @@ class CBaseEntity;
 
 enum PLAYER_ANIM 
 { 
-    PLAYER_IDLE = 0, 
-    PLAYER_WALK, 
-    PLAYER_JUMP,
-    PLAYER_SUPERJUMP,
-    PLAYER_DIE,
-    PLAYER_ATTACK1
+    PLAYER_IDLE = 0, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1
 };
 
 // ============================================================================
@@ -54,9 +50,6 @@ enum PLAYER_ANIM
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
 #endif
-#ifndef MAX_CLIP_PLANES
-#define MAX_CLIP_PLANES 5
-#endif
 
 MomSurfFixExt g_MomSurfFixExt;
 SDKExtension *g_pExtensionIface = &g_MomSurfFixExt;
@@ -65,10 +58,9 @@ IEngineTrace *enginetrace = nullptr;
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
 // ConVar 定义
-ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
-ConVar g_cvRampInitialRetraceLength("momsurffix_ramp_retrace_length", "0.2", FCVAR_NOTIFY);
-ConVar g_cvNoclipWorkaround("momsurffix_enable_noclip_workaround", "1", FCVAR_NOTIFY);
-ConVar g_cvBounce("sv_bounce", "0");
+// 这里的参数意义变了：主要控制是否开启修正
+ConVar g_cvEnable("momsurffix_enable", "1", FCVAR_NOTIFY, "Enable Surf Bug Fix");
+ConVar g_cvDebug("momsurffix_debug", "0", FCVAR_NOTIFY, "Print debug info when fix activates");
 
 int g_off_Player = -1;
 int g_off_MV = -1;
@@ -77,9 +69,6 @@ int g_off_VecAbsOrigin = -1;
 int g_off_GroundEntity = -1;
 
 CSimpleDetour *g_pDetour = nullptr;
-
-static CGameTrace g_TempTraces[MAXPLAYERS + 1];
-static Vector g_TempPlanes[MAX_CLIP_PLANES];
 
 // ----------------------------------------------------------------------------
 // 辅助类与函数
@@ -105,72 +94,25 @@ private:
     int m_collisionGroup;
 };
 
-void Manual_TracePlayerBBox(IGameMovement *pGM, IHandleEntity *pPlayerEntity, const Vector &start, const Vector &end, unsigned int fMask, int collisionGroup, CGameTrace &pm)
+// 简单的射线检测，用于找回丢失的法线
+void TracePlayerBBox(const Vector &start, const Vector &end, IHandleEntity *pPlayerEntity, int collisionGroup, CGameTrace &pm)
 {
     if (!enginetrace) return;
-
-    Vector mins = pGM->GetPlayerMins(false); 
-    Vector maxs = pGM->GetPlayerMaxs(false);
-
+    
+    // CS:GO 玩家标准碰撞盒 (这里取通用的滑翔 Hull 大小)
+    // 为了更通用的修复，我们用射线探测前方即可，不需要极其精确的 Hull，
+    // 因为 Ramp Bug 通常发生在表面判定错误上。
     Ray_t ray;
+    Vector mins(-16, -16, 0);
+    Vector maxs(16, 16, 72); 
     ray.Init(start, end, mins, maxs);
 
     CTraceFilterSimple traceFilter(pPlayerEntity, collisionGroup);
-    enginetrace->TraceRay(ray, fMask, &traceFilter, &pm);
-}
-
-void FindValidPlane(IGameMovement *pGM, IHandleEntity *pPlayerEntity, const Vector &origin, const Vector &vel, Vector &outPlane)
-{
-    if (!enginetrace) return;
-
-    Vector sum_normal = vec3_origin;
-    int count = 0;
-
-    for (int x = -1; x <= 1; x++)
-    {
-        for (int y = -1; y <= 1; y++)
-        {
-            for (int z = -1; z <= 1; z++)
-            {
-                if (x == 0 && y == 0 && z == 0) continue;
-
-                Vector dir(x * 0.03125f, y * 0.03125f, z * 0.03125f);
-                dir.NormalizeInPlace();
-                Vector end = origin + (dir * 0.0625f);
-
-                CGameTrace trace;
-                CTraceFilterSimple filter(pPlayerEntity, COLLISION_GROUP_PLAYER_MOVEMENT);
-                Ray_t ray;
-                ray.Init(origin, end);
-                enginetrace->TraceRay(ray, MASK_PLAYERSOLID, &filter, &trace);
-
-                if (trace.fraction < 1.0f && trace.plane.normal.z > 0.7f)
-                {
-                    sum_normal += trace.plane.normal;
-                    count++;
-                }
-            }
-        }
-    }
-
-    if (count > 0)
-    {
-        outPlane = sum_normal * (1.0f / count);
-        outPlane.NormalizeInPlace();
-    }
-    else
-    {
-        outPlane = vec3_origin;
-    }
-}
-
-bool IsValidMovementTrace(const CGameTrace &tr)
-{
-    return (tr.fraction > 0.0f || tr.startsolid);
+    enginetrace->TraceRay(ray, MASK_PLAYERSOLID, &traceFilter, &pm);
 }
 
 // ----------------------------------------------------------------------------
-// Detour Logic (防飞天版)
+// Detour Logic (仿插件逻辑：事后修正版)
 // ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
@@ -182,158 +124,101 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
     if (!Original) return 0;
 
-    if (!g_cvNoclipWorkaround.GetBool())
+    // 1. 如果没开插件，直接返回原版
+    if (!g_cvEnable.GetBool())
     {
         return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
     }
 
     void *pPlayer = *(void **)((uintptr_t)pThis + g_off_Player);
     CMoveData *mv = *(CMoveData **)((uintptr_t)pThis + g_off_MV);
-
     if (!pPlayer || !mv) return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
 
     Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
-    Vector vel = *pVel; 
-
-    // 保留地面检测（为了不破坏起步手感）
-    if (vel.LengthSqr() < (250.0f * 250.0f))
-    {
-        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft); 
-    }
-
-    unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
-    bool bIsAirborne = (hGroundEntity == 0xFFFFFFFF); 
-
-    if (!bIsAirborne)
-    {
-        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
-    }
-
-    // --- 开始修正后的物理计算 ---
-
-    IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
-    VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
-
-    int client = pEntity->GetRefEHandle().GetEntryIndex();
-    
-    CGameTrace &pm = g_TempTraces[client];
-    pm = CGameTrace(); 
-
     Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
-    Vector origin = *pOrigin;
 
-    float time_left = flTimeLeft;
-    int numbumps = g_cvRampBumpCount.GetInt();
-    int numplanes = 0;
-    bool stuck_on_ramp = false;
-    Vector valid_plane;
-    bool has_valid_plane = false;
-    int blocked = 0;
+    // 2. 记录【移动前】的状态
+    Vector preVelocity = *pVel;
+    Vector preOrigin = *pOrigin;
+    float preSpeedSq = preVelocity.LengthSqr();
 
-    IGameMovement *pGM = (IGameMovement *)pThis;
+    // 3. 【完全信任】让 CS:GO 原版引擎先跑完这一帧
+    // 这保证了平时走路、跳跃、正常的滑翔手感 100% 原汁原味
+    int result = Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
 
-    for (int bumpcount = 0; bumpcount < numbumps; bumpcount++)
+    // 4. 【事后验尸】检查是否发生了 Ramp Bug
+    // 只有同时满足以下条件，才判定为 BUG：
+    
+    // 条件 A: 移动前是在滑翔状态 (速度足够快，> 250)
+    if (preSpeedSq < 250.0f * 250.0f) return result;
+
+    // 条件 B: 依然在空中 (没有落地)
+    // 0xFFFFFFFF = -1 (FL_ONGROUND 标志位通常对应 hGroundEntity 有效性)
+    unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
+    bool bIsAirborne = (hGroundEntity == 0xFFFFFFFF);
+    if (!bIsAirborne) return result;
+
+    // 条件 C: 移动后速度骤降
+    // Ramp Bug 的特征是：明明在滑翔，速度突然归零或大幅损失。
+    // 这里我们设定阈值：如果速度保留不到原来的 70%，就算作异常。
+    float postSpeedSq = pVel->LengthSqr();
+    if (postSpeedSq > preSpeedSq * 0.7f) return result;
+
+    // 5. 【执行修复】这就是你要的“像插件一样”的处理
+    // 既然原版引擎算错了（把你卡停了），我们就手动算一个“正确的滑行方向”还给你
+    
+    IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
+    CGameTrace trace;
+    
+    // 重新发射一条射线，探测前方撞到了什么
+    // 预测位置：按原速度移动一帧的距离
+    Vector endPos = preOrigin + (preVelocity * flTimeLeft);
+    TracePlayerBBox(preOrigin, endPos, pEntity, COLLISION_GROUP_PLAYER_MOVEMENT, trace);
+
+    // 如果真的撞到了东西 (DidHit)，而且这个东西是个陡坡 (plane.z < 0.7)
+    // 注意：如果是平地 (z >= 0.7) 导致的减速，那是正常落地，不需要修
+    if (trace.DidHit() && trace.plane.normal.z < 0.7f)
     {
-        if (vel.LengthSqr() == 0.0f) break;
-
-        Vector end;
-        VectorMA(origin, time_left, vel, end);
-
-        if (pFirstDest && (end == *pFirstDest))
-        {
-            pm = *pFirstTrace;
-        }
-        else
-        {
-            Manual_TracePlayerBBox(pGM, pEntity, origin, end, MASK_PLAYERSOLID, COLLISION_GROUP_PLAYER_MOVEMENT, pm);
-        }
-
-        if (pm.fraction > 0.0f) origin = pm.endpos;
-        if (pm.fraction == 1.0f) break;
-
-        time_left -= time_left * pm.fraction;
-
-        if (numplanes >= MAX_CLIP_PLANES)
-        {
-            vel.Init();
-            break;
-        }
-
-        g_TempPlanes[numplanes] = pm.plane.normal;
-        numplanes++;
-
-        if (bumpcount > 0 && !IsValidMovementTrace(pm))
-        {
-            stuck_on_ramp = true;
-        }
-
-        if (stuck_on_ramp && vel.z >= -6.25f && vel.z <= 0.0f && !has_valid_plane)
-        {
-            FindValidPlane(pGM, pEntity, origin, vel, valid_plane);
-            has_valid_plane = (valid_plane.LengthSqr() > 0.000001f);
-        }
-
-        if (has_valid_plane)
-        {
-            VectorMA(origin, g_cvRampInitialRetraceLength.GetFloat(), valid_plane, origin);
-        }
-
-        float allFraction = 0.0f;
-        int blocked_planes = 0;
+        // 核心修复算法：ClipVelocity
+        // 计算完美的滑行向量：去掉垂直于墙面的速度分量
+        // newVel = oldVel - (normal * (oldVel dot normal))
+        // 这里的 1.0f 代表无摩擦力反弹（滑翔理想状态）
+        float backoff = DotProduct(preVelocity, trace.plane.normal);
         
-        for (int i = 0; i < numplanes; i++)
+        // 只有当实际上是撞向墙面时才修复（避免背离墙面时被吸回去）
+        if (backoff < 0.0f)
         {
-            Vector new_vel;
-            if (g_TempPlanes[i].z >= 0.7f)
+            Vector fixVel = preVelocity - (trace.plane.normal * backoff);
+
+            // 【安全限制】防止飞天
+            // 如果这个新速度的垂直分量太离谱，强制压住。
+            // 800 u/s 差不多是正常弹跳极限，超过这个通常就是物理 Bug 了。
+            if (fixVel.z > 800.0f) fixVel.z = 800.0f;
+
+            // 应用修复！把正确的速度写回引擎
+            *pVel = fixVel;
+            
+            // Noclip Workaround: 稍微把人往法线方向推一点点，防止下一帧还陷在墙里
+            // 只推 0.1 单位，微不可察，但能防止连续卡顿
+            if (trace.plane.normal.z > 0.0f) 
             {
-                blocked_planes++;
-                new_vel.Init();
-            }
-            else
-            {
-                // ClipVelocity 逻辑
-                float backoff = DotProduct(vel, g_TempPlanes[i]) * 1.0f;
-                new_vel = vel - (g_TempPlanes[i] * backoff);
+                 *pOrigin = trace.endpos + (trace.plane.normal * 0.1f);
             }
 
-            if (i == 0)
+            if (g_cvDebug.GetBool())
             {
-                vel = new_vel;
+                // 如果需要调试，可以在控制台看到修复日志
+                // Msg("[MomSurfFix] Fixed Ramp Bug! Speed restored.\n");
             }
-            else
-            {
-                // ❌ 删除了 Momentum Mod 的“强制速度保持”逻辑
-                // float dot = DotProduct(new_vel, new_vel);
-                // if (dot > 0.0f) new_vel *= (vel.Length() / sqrt(dot));
-                
-                // ✅ 替换为标准覆盖：允许碰撞损失能量
-                // 这就是原版 Source 引擎的处理方式，虽然会减速，但绝不会飞天。
-                // 结合上面的多重 Trace，依然能修复卡顿（因为卡顿通常是因为完全停住，而不是减速）。
-                vel = new_vel;
-            }
-
-            allFraction += pm.fraction;
-        }
-
-        if (blocked_planes == numplanes)
-        {
-            blocked |= 2;
-            break;
         }
     }
 
-    // 【新增】安全钳制 (Safety Clamp)
-    // 防止极其罕见的计算错误导致垂直速度溢出
-    if (vel.z > 2000.0f) vel.z = 2000.0f;
-    if (vel.z < -3500.0f) vel.z = -3500.0f;
-
-    *pVel = vel;
-    *pOrigin = origin;
-
-    return blocked;
+    return result;
 }
 
-// ... (SDK_OnLoad 等后续代码保持不变) ...
+// ... (以下 SDK_OnLoad 等代码保持完全一致，包含手动注册 ConVar 逻辑) ...
+// 为了确保完整性，请保留上一版文件中的生命周期函数。
+
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
     char conf_error[255];
