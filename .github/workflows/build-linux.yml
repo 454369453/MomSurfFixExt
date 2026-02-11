@@ -40,10 +40,9 @@ jobs:
       run: |
         mkdir -p sdks
         cd sdks
-        # ✅ 【关键修改】锁定 SourceMod 1.11 (稳定兼容 CS:GO)
+        # ✅ 锁定 1.11-dev (CS:GO 扩展的最佳选择)
         git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.11-dev sourcemod
-        # ✅ 【回归标准】保留 Metamod 1.12 (向下兼容没问题)
-        git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource
+        # ❌ 彻底删除 Metamod 下载
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
 
     - name: Configure
@@ -52,12 +51,11 @@ jobs:
         CXX: g++-9
       run: |
         rm -rf build
-        # ✅ 【回归标准】保留 --mms-path，这是标准 SM 扩展的构建方式
+        # ✅ 关键：移除 --mms-path，回归纯 SM 扩展模式
         python3 configure.py -o build \
           --sdks=csgo \
           --targets=x86 \
           --sm-path="${{ github.workspace }}/sdks/sourcemod" \
-          --mms-path="${{ github.workspace }}/sdks/mmsource" \
           --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-csgo"
         
         test -f build/.ambuild2/vars
