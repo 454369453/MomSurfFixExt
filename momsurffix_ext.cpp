@@ -21,7 +21,7 @@
 #include <ihandleentity.h> 
 
 // ============================================================================
-// 【3】SDK 兼容垫片 (CS:GO SDK 必需，保留)
+// 【3】SDK 兼容垫片 (CS:GO SDK 必需)
 // ============================================================================
 
 // A. 类类型前置声明
@@ -61,21 +61,20 @@ enum PLAYER_ANIM
 MomSurfFixExt g_MomSurfFixExt;
 
 // ============================================================================
-// 【核心修复区】 手动实现入口与接口导出
+// 【链接器冲突修复】
 // ============================================================================
+// 1. 为什么不写 GetSMExtAPI？
+//    报错显示 smsdk_ext.o 已经定义了 GetSMExtAPI。如果我们再写一个，就会导致
+//    "multiple definition" 错误。所以这里我们什么都不写，直接用 SDK 里的。
+//
+// 2. 为什么要写 g_pExtensionIface？
+//    SDK 里的 GetSMExtAPI 需要访问这个全局变量来获取我们的扩展实例。
+//    如果没有这行，编译能过，但服务器加载时会报 "undefined symbol: g_pExtensionIface"。
 
-// 1. 解决 "undefined symbol: g_pExtensionIface" (你最初的运行时报错)
-// smsdk_ext.cpp 需要这个全局指针来访问你的扩展实例。
-// 之前宏混乱导致它没生成，现在我们手动写死它，运行时绝对不会再找不到符号了。
 SDKExtension *g_pExtensionIface = &g_MomSurfFixExt;
 
-// 2. 解决 "IMSPlugin does not name a type" (你现在的编译报错)
-// 既然是纯 SourceMod 扩展，入口函数不需要返回 Metamod 的 IMSPlugin 类型。
-// 直接返回 void*，这是最底层的标准写法，编译器绝对认识 void*。
-extern "C" __attribute__((visibility("default"))) void *GetSMExtAPI()
-{
-    return &g_MomSurfFixExt;
-}
+// 3. 为什么不写 SMEXT_LINK 宏？
+//    因为这个宏会尝试生成 GetSMExtAPI，导致和第 1 点一样的冲突。
 
 // ============================================================================
 
