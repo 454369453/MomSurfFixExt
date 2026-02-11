@@ -1,7 +1,18 @@
+// ============================================================================
+// 【0】SourceMod 扩展核心
+// ============================================================================
 #include "extension.h" 
+
+// ============================================================================
+// 【1】标准库
+// ============================================================================
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+
+// ============================================================================
+// 【2】基础 SDK 头文件
+// ============================================================================
 #include <tier0/platform.h>
 #include <tier0/memalloc.h>
 #include <tier1/convar.h>
@@ -9,9 +20,15 @@
 #include <soundflags.h>
 #include <ihandleentity.h> 
 
+// ============================================================================
+// 【3】SDK 兼容垫片 (必须保留)
+// ============================================================================
+
+// A. 类类型前置声明
 class CBasePlayer;
 class CBaseEntity;
 
+// B. 枚举类型垫片
 enum PLAYER_ANIM 
 { 
     PLAYER_IDLE = 0, 
@@ -22,12 +39,18 @@ enum PLAYER_ANIM
     PLAYER_ATTACK1
 };
 
+// ============================================================================
+// 【4】依赖上述类型的 SDK 头文件
+// ============================================================================
 #include <engine/IEngineTrace.h>
 #include <ispatialpartition.h> 
 #include <igamemovement.h> 
 #include <tier0/vprof.h>
 #include "simple_detour.h"
 
+// ============================================================================
+// 全局变量
+// ============================================================================
 #ifndef MAXPLAYERS
 #define MAXPLAYERS 65
 #endif
@@ -36,11 +59,25 @@ enum PLAYER_ANIM
 #endif
 
 MomSurfFixExt g_MomSurfFixExt;
-SMEXT_LINK(&g_MomSurfFixExt);
+
+// ----------------------------------------------------------------------------
+// 【物理修复】手动实现入口 (No More Macros)
+// ----------------------------------------------------------------------------
+// 我们不再使用 SMEXT_LINK 宏，而是直接写出它背后的 C++ 代码。
+// 这样无论 Metamod 宏是否存在，编译器都能看到一个合法的函数定义。
+// 这彻底绕过了 "expected constructor" 错误。
+
+extern "C" __attribute__((visibility("default"))) IMSPlugin *GetSMExtAPI()
+{
+    return &g_MomSurfFixExt;
+}
+
+// ----------------------------------------------------------------------------
 
 IEngineTrace *enginetrace = nullptr;
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
 
+// ConVar 定义
 ConVar g_cvRampBumpCount("momsurffix_ramp_bumpcount", "8", FCVAR_NOTIFY);
 ConVar g_cvRampInitialRetraceLength("momsurffix_ramp_retrace_length", "0.2", FCVAR_NOTIFY);
 ConVar g_cvNoclipWorkaround("momsurffix_enable_noclip_workaround", "1", FCVAR_NOTIFY);
@@ -57,6 +94,9 @@ CSimpleDetour *g_pDetour = nullptr;
 static CGameTrace g_TempTraces[MAXPLAYERS + 1];
 static Vector g_TempPlanes[MAX_CLIP_PLANES];
 
+// ----------------------------------------------------------------------------
+// 辅助类与函数
+// ----------------------------------------------------------------------------
 class CTraceFilterSimple : public ITraceFilter
 {
 public:
@@ -142,6 +182,9 @@ bool IsValidMovementTrace(const CGameTrace &tr)
     return (tr.fraction > 0.0f || tr.startsolid);
 }
 
+// ----------------------------------------------------------------------------
+// Detour Logic
+// ----------------------------------------------------------------------------
 #ifndef THISCALL
     #define THISCALL
 #endif
@@ -279,6 +322,9 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     return blocked;
 }
 
+// ============================================================================
+// SourceMod 生命周期
+// ============================================================================
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
     char conf_error[255];
