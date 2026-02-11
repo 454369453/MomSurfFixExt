@@ -10,6 +10,7 @@
 #include <cstring>
 #include <cstdint>
 #include <dlfcn.h> 
+#include <algorithm> // 用于 std::min, std::max
 
 // ============================================================================
 // 【2】基础 SDK 头文件
@@ -169,11 +170,8 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 }
 
 // ----------------------------------------------------------------------------
-// Detour Logic (Reactive Mode / 反应式修复)
+// Detour Logic (防飞天版)
 // ----------------------------------------------------------------------------
-// 原理：只有当原版引擎发生 Ramp Bug 时才介入，否则完全不干预。
-// 这解决了 99% 的预测错误抖动问题。
-
 #ifndef THISCALL
     #define THISCALL
 #endif
@@ -184,7 +182,6 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
     if (!Original) return 0;
 
-    // 1. 如果功能关闭，直接原版
     if (!g_cvNoclipWorkaround.GetBool())
     {
         return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
@@ -192,53 +189,39 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 
     void *pPlayer = *(void **)((uintptr_t)pThis + g_off_Player);
     CMoveData *mv = *(CMoveData **)((uintptr_t)pThis + g_off_MV);
+
     if (!pPlayer || !mv) return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
 
     Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
-    Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
-    
-    // 2. 备份当前状态 (位置和速度)
-    Vector orgVelocity = *pVel;
-    Vector orgOrigin = *pOrigin;
+    Vector vel = *pVel; 
 
-    // 3. 【关键】先让原版引擎跑一遍！
-    int result = Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
-
-    // 4. 检查是否发生了 BUG
-    // 如果速度突然损失严重 (撞墙/卡住)，但我们并没有碰到很陡的墙（Ramp Bug 特征）
-    // 或者原版引擎直接返回被阻挡
-    // 这里做一个简单的启发式检测：如果在滑翔（速度快），且突然停下或大幅减速
-    
-    float speedSq = orgVelocity.LengthSqr();
-    float newSpeedSq = pVel->LengthSqr();
-    
-    // 如果速度很快 (>250)，且经过计算后速度损失超过 50% (或其他阈值)，判定为可能遇到 BUG
-    bool potentialRampBug = (speedSq > 250.0f*250.0f) && (newSpeedSq < speedSq * 0.5f);
-
-    if (!potentialRampBug)
+    // 保留地面检测（为了不破坏起步手感）
+    if (vel.LengthSqr() < (250.0f * 250.0f))
     {
-        // 如果原版跑得挺好，就直接返回原版结果。
-        // 这保证了绝大多数时候的丝滑手感，客户端预测完美匹配。
-        return result; 
+        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft); 
     }
 
-    // 5. 只有检测到 BUG 时，才回滚并启用 Momentum 修复算法
-    // 恢复状态
-    *pVel = orgVelocity;
-    *pOrigin = orgOrigin;
+    unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
+    bool bIsAirborne = (hGroundEntity == 0xFFFFFFFF); 
 
-    // --- 开始 Momentum Mod 修复算法 (仅在 BUG 发生时介入) ---
-    // (代码逻辑同上，但只在关键时刻运行)
+    if (!bIsAirborne)
+    {
+        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
+    }
+
+    // --- 开始修正后的物理计算 ---
 
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
 
     int client = pEntity->GetRefEHandle().GetEntryIndex();
+    
     CGameTrace &pm = g_TempTraces[client];
     pm = CGameTrace(); 
 
+    Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
     Vector origin = *pOrigin;
-    Vector vel = *pVel;
+
     float time_left = flTimeLeft;
     int numbumps = g_cvRampBumpCount.GetInt();
     int numplanes = 0;
@@ -257,24 +240,32 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
         VectorMA(origin, time_left, vel, end);
 
         if (pFirstDest && (end == *pFirstDest))
+        {
             pm = *pFirstTrace;
+        }
         else
+        {
             Manual_TracePlayerBBox(pGM, pEntity, origin, end, MASK_PLAYERSOLID, COLLISION_GROUP_PLAYER_MOVEMENT, pm);
+        }
 
         if (pm.fraction > 0.0f) origin = pm.endpos;
         if (pm.fraction == 1.0f) break;
 
         time_left -= time_left * pm.fraction;
 
-        if (numplanes >= MAX_CLIP_PLANES) { vel.Init(); break; }
+        if (numplanes >= MAX_CLIP_PLANES)
+        {
+            vel.Init();
+            break;
+        }
 
         g_TempPlanes[numplanes] = pm.plane.normal;
         numplanes++;
 
-        // 仅在空中检测
-        unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
-        if (bumpcount > 0 && hGroundEntity == 0xFFFFFFFF && !IsValidMovementTrace(pm))
+        if (bumpcount > 0 && !IsValidMovementTrace(pm))
+        {
             stuck_on_ramp = true;
+        }
 
         if (stuck_on_ramp && vel.z >= -6.25f && vel.z <= 0.0f && !has_valid_plane)
         {
@@ -283,35 +274,58 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
         }
 
         if (has_valid_plane)
+        {
             VectorMA(origin, g_cvRampInitialRetraceLength.GetFloat(), valid_plane, origin);
+        }
 
-        // Clip Velocity
+        float allFraction = 0.0f;
         int blocked_planes = 0;
+        
         for (int i = 0; i < numplanes; i++)
         {
             Vector new_vel;
-            if (g_TempPlanes[i].z >= 0.7f) // Floor
-            { 
-                blocked_planes++; 
-                new_vel.Init(); // Stop on floor in this logic
+            if (g_TempPlanes[i].z >= 0.7f)
+            {
+                blocked_planes++;
+                new_vel.Init();
             }
             else
             {
+                // ClipVelocity 逻辑
                 float backoff = DotProduct(vel, g_TempPlanes[i]) * 1.0f;
                 new_vel = vel - (g_TempPlanes[i] * backoff);
             }
 
-            if (i == 0) vel = new_vel;
-            else
+            if (i == 0)
             {
-                float dot = DotProduct(new_vel, new_vel);
-                if (dot > 0.0f) new_vel *= (vel.Length() / sqrt(dot));
                 vel = new_vel;
             }
+            else
+            {
+                // ❌ 删除了 Momentum Mod 的“强制速度保持”逻辑
+                // float dot = DotProduct(new_vel, new_vel);
+                // if (dot > 0.0f) new_vel *= (vel.Length() / sqrt(dot));
+                
+                // ✅ 替换为标准覆盖：允许碰撞损失能量
+                // 这就是原版 Source 引擎的处理方式，虽然会减速，但绝不会飞天。
+                // 结合上面的多重 Trace，依然能修复卡顿（因为卡顿通常是因为完全停住，而不是减速）。
+                vel = new_vel;
+            }
+
+            allFraction += pm.fraction;
         }
 
-        if (blocked_planes == numplanes) { blocked |= 2; break; }
+        if (blocked_planes == numplanes)
+        {
+            blocked |= 2;
+            break;
+        }
     }
+
+    // 【新增】安全钳制 (Safety Clamp)
+    // 防止极其罕见的计算错误导致垂直速度溢出
+    if (vel.z > 2000.0f) vel.z = 2000.0f;
+    if (vel.z < -3500.0f) vel.z = -3500.0f;
 
     *pVel = vel;
     *pOrigin = origin;
@@ -319,9 +333,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     return blocked;
 }
 
-// ============================================================================
-// SourceMod 生命周期 (保持不变)
-// ============================================================================
+// ... (SDK_OnLoad 等后续代码保持不变) ...
 bool MomSurfFixExt::SDK_OnLoad(char *error, size_t maxlength, bool late)
 {
     char conf_error[255];
