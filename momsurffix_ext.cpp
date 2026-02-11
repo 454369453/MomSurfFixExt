@@ -21,16 +21,14 @@
 #include <ihandleentity.h> 
 
 // ============================================================================
-// 【3】SDK 兼容层 (必须保留，用于修复 CS:GO SDK 缺文件的问题)
+// 【3】SDK 兼容层 (保留：解决 CS:GO SDK 缺文件问题)
 // ============================================================================
 
-// A. 类类型前置声明 (Forward Declaration)
+// A. 类类型前置声明
 class CBasePlayer;
 class CBaseEntity;
 
-// B. 枚举类型手动定义 (Dummy Definition)
-// 即使降级了 SourceMod SDK，CS:GO 的 HL2SDK 依然缺少 playeranimstate.h
-// 所以这个垫片必须保留，否则 imovehelper.h 无法编译
+// B. 枚举类型垫片 (CS:GO SDK 依然需要这个)
 enum PLAYER_ANIM 
 { 
     PLAYER_IDLE = 0, 
@@ -63,10 +61,9 @@ enum PLAYER_ANIM
 MomSurfFixExt g_MomSurfFixExt;
 
 // ----------------------------------------------------------------------------
-// 扩展入口点 (回归标准宏)
+// 扩展入口点 (回归标准)
 // ----------------------------------------------------------------------------
-// 在 SourceMod 1.11 SDK 下，只要 smsdk_config.h 配置正确，
-// 这个宏就能完美工作，不需要任何额外处理。
+// 在 SM 1.11 下，这是完全标准的写法，无需任何 Hack
 SMEXT_LINK(&g_MomSurfFixExt);
 
 IEngineTrace *enginetrace = nullptr;
@@ -90,7 +87,7 @@ static CGameTrace g_TempTraces[MAXPLAYERS + 1];
 static Vector g_TempPlanes[MAX_CLIP_PLANES];
 
 // ----------------------------------------------------------------------------
-// 辅助类与函数
+// 辅助类与函数 (保持不变)
 // ----------------------------------------------------------------------------
 class CTraceFilterSimple : public ITraceFilter
 {
@@ -194,7 +191,6 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 
     if (!pPlayer || !mv || !Original) return 0;
 
-    // 安全强转 void* -> IHandleEntity*
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
 
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
