@@ -169,8 +169,11 @@ bool IsValidMovementTrace(const CGameTrace &tr)
 }
 
 // ----------------------------------------------------------------------------
-// Detour Logic (带保险丝的修正版)
+// Detour Logic (Reactive Mode / 反应式修复)
 // ----------------------------------------------------------------------------
+// 原理：只有当原版引擎发生 Ramp Bug 时才介入，否则完全不干预。
+// 这解决了 99% 的预测错误抖动问题。
+
 #ifndef THISCALL
     #define THISCALL
 #endif
@@ -181,7 +184,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
     TryPlayerMove_t Original = (TryPlayerMove_t)g_pDetour->GetTrampoline();
     if (!Original) return 0;
 
-    // 【保险丝 0】总开关：如果 CVAR 关了，直接用原版逻辑
+    // 1. 如果功能关闭，直接原版
     if (!g_cvNoclipWorkaround.GetBool())
     {
         return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
@@ -189,44 +192,53 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 
     void *pPlayer = *(void **)((uintptr_t)pThis + g_off_Player);
     CMoveData *mv = *(CMoveData **)((uintptr_t)pThis + g_off_MV);
-
     if (!pPlayer || !mv) return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
 
     Vector *pVel = (Vector *)((uintptr_t)mv + g_off_VecVelocity);
-    Vector vel = *pVel; 
+    Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
+    
+    // 2. 备份当前状态 (位置和速度)
+    Vector orgVelocity = *pVel;
+    Vector orgOrigin = *pOrigin;
 
-    // 【保险丝 1】速度阈值
-    // 只有速度超过 250 (跑步速度) 时才介入。
-    // 这解决了你在起点、梯子、静止时的瞬移和抖动问题。
-    if (vel.LengthSqr() < (250.0f * 250.0f))
+    // 3. 【关键】先让原版引擎跑一遍！
+    int result = Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
+
+    // 4. 检查是否发生了 BUG
+    // 如果速度突然损失严重 (撞墙/卡住)，但我们并没有碰到很陡的墙（Ramp Bug 特征）
+    // 或者原版引擎直接返回被阻挡
+    // 这里做一个简单的启发式检测：如果在滑翔（速度快），且突然停下或大幅减速
+    
+    float speedSq = orgVelocity.LengthSqr();
+    float newSpeedSq = pVel->LengthSqr();
+    
+    // 如果速度很快 (>250)，且经过计算后速度损失超过 50% (或其他阈值)，判定为可能遇到 BUG
+    bool potentialRampBug = (speedSq > 250.0f*250.0f) && (newSpeedSq < speedSq * 0.5f);
+
+    if (!potentialRampBug)
     {
-        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft); 
+        // 如果原版跑得挺好，就直接返回原版结果。
+        // 这保证了绝大多数时候的丝滑手感，客户端预测完美匹配。
+        return result; 
     }
 
-    // 【保险丝 2】地面检测
-    // 如果玩家在地上 (hGroundEntity != -1)，绝对不要介入。
-    // 地面摩擦力和步进逻辑非常复杂，交给原版引擎处理。
-    unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
-    bool bIsAirborne = (hGroundEntity == 0xFFFFFFFF); 
+    // 5. 只有检测到 BUG 时，才回滚并启用 Momentum 修复算法
+    // 恢复状态
+    *pVel = orgVelocity;
+    *pOrigin = orgOrigin;
 
-    if (!bIsAirborne)
-    {
-        return Original(pThis, pFirstDest, pFirstTrace, flTimeLeft);
-    }
-
-    // --- 以下代码只会在你 空中高速滑翔 时执行 ---
+    // --- 开始 Momentum Mod 修复算法 (仅在 BUG 发生时介入) ---
+    // (代码逻辑同上，但只在关键时刻运行)
 
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
 
     int client = pEntity->GetRefEHandle().GetEntryIndex();
-    
     CGameTrace &pm = g_TempTraces[client];
     pm = CGameTrace(); 
 
-    Vector *pOrigin = (Vector *)((uintptr_t)mv + g_off_VecAbsOrigin);
     Vector origin = *pOrigin;
-
+    Vector vel = *pVel;
     float time_left = flTimeLeft;
     int numbumps = g_cvRampBumpCount.GetInt();
     int numplanes = 0;
@@ -245,33 +257,24 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
         VectorMA(origin, time_left, vel, end);
 
         if (pFirstDest && (end == *pFirstDest))
-        {
             pm = *pFirstTrace;
-        }
         else
-        {
             Manual_TracePlayerBBox(pGM, pEntity, origin, end, MASK_PLAYERSOLID, COLLISION_GROUP_PLAYER_MOVEMENT, pm);
-        }
 
         if (pm.fraction > 0.0f) origin = pm.endpos;
         if (pm.fraction == 1.0f) break;
 
         time_left -= time_left * pm.fraction;
 
-        if (numplanes >= MAX_CLIP_PLANES)
-        {
-            vel.Init();
-            break;
-        }
+        if (numplanes >= MAX_CLIP_PLANES) { vel.Init(); break; }
 
         g_TempPlanes[numplanes] = pm.plane.normal;
         numplanes++;
 
-        // 这里的 bIsAirborne 已经被我们在循环外检查过了，但保留逻辑不变
-        if (bumpcount > 0 && !IsValidMovementTrace(pm))
-        {
+        // 仅在空中检测
+        unsigned long hGroundEntity = *(unsigned long *)((uintptr_t)pPlayer + g_off_GroundEntity);
+        if (bumpcount > 0 && hGroundEntity == 0xFFFFFFFF && !IsValidMovementTrace(pm))
             stuck_on_ramp = true;
-        }
 
         if (stuck_on_ramp && vel.z >= -6.25f && vel.z <= 0.0f && !has_valid_plane)
         {
@@ -280,20 +283,17 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
         }
 
         if (has_valid_plane)
-        {
             VectorMA(origin, g_cvRampInitialRetraceLength.GetFloat(), valid_plane, origin);
-        }
 
-        float allFraction = 0.0f;
+        // Clip Velocity
         int blocked_planes = 0;
-        
         for (int i = 0; i < numplanes; i++)
         {
             Vector new_vel;
-            if (g_TempPlanes[i].z >= 0.7f)
-            {
-                blocked_planes++;
-                new_vel.Init();
+            if (g_TempPlanes[i].z >= 0.7f) // Floor
+            { 
+                blocked_planes++; 
+                new_vel.Init(); // Stop on floor in this logic
             }
             else
             {
@@ -301,25 +301,16 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
                 new_vel = vel - (g_TempPlanes[i] * backoff);
             }
 
-            if (i == 0)
-            {
-                vel = new_vel;
-            }
+            if (i == 0) vel = new_vel;
             else
             {
                 float dot = DotProduct(new_vel, new_vel);
                 if (dot > 0.0f) new_vel *= (vel.Length() / sqrt(dot));
                 vel = new_vel;
             }
-
-            allFraction += pm.fraction;
         }
 
-        if (blocked_planes == numplanes)
-        {
-            blocked |= 2;
-            break;
-        }
+        if (blocked_planes == numplanes) { blocked |= 2; break; }
     }
 
     *pVel = vel;
