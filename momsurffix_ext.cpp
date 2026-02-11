@@ -214,7 +214,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
             // D. 应用最终速度
             *pVel = fixVel;
             
-            // E. 【消除顿挫】注释掉位置修正
+            // E. 【消除顿挫】移除位置修正
             // 移除下面这行代码是消除“顿挫感”的关键。
             // 我们只修正速度，让引擎自然的去处理下一帧的位置，这样画面最丝滑。
             // if (trace.plane.normal.z > 0.0f) 
@@ -341,12 +341,4 @@ void MomSurfFixExt::SDK_OnAllLoaded()
 bool MomSurfFixExt::QueryRunning(char *error, size_t maxlength)
 {
     return true;
-}
-
-// ----------------------------------------------------------------------------
-// 【物理修复】手动实现入口 (No More Macros)
-// ----------------------------------------------------------------------------
-extern "C" __attribute__((visibility("default"))) void *GetSMExtAPI()
-{
-    return &g_MomSurfFixExt;
 }
