@@ -5,7 +5,8 @@ import os
 cxx = builder.DetectCxx(target_arch=builder.options.targets)
 library = cxx.Library('momsurffix_ext.ext')
 
-# 2. 源文件 (✅ 包含 smsdk_ext.cpp 是完全正确的)
+# 2. 源文件
+# 1.11 SDK 下，手动加入 smsdk_ext.cpp 是标准做法
 sm_path = builder.options.sm_path
 library.sources += [
     'momsurffix_ext.cpp',
@@ -13,10 +14,11 @@ library.sources += [
     os.path.join(sm_path, 'public', 'smsdk_ext.cpp')
 ]
 
-# 3. 获取其他路径参数 (❌ 移除 mms_path)
+# 3. 获取路径参数 (✅ 恢复 mms_path)
+mms_path = builder.options.mms_path
 hl2sdk_path = builder.options.hl2sdk_path
 
-# 4. 头文件包含路径
+# 4. 头文件包含路径 (✅ 恢复 Metamod 路径)
 library.compiler.includes += [
     builder.sourcePath,
     os.path.join(sm_path, 'public'),
@@ -27,7 +29,10 @@ library.compiler.includes += [
     os.path.join(sm_path, 'public/amtl/amtl'),
     os.path.join(sm_path, 'third_party/amtl'),
     os.path.join(sm_path, 'third_party/amtl/amtl'),
-    # HL2SDK
+    # Metamod 路径
+    os.path.join(mms_path, 'core'),
+    os.path.join(mms_path, 'core', 'sourcehook'),
+    # HL2SDK 路径
     os.path.join(hl2sdk_path, 'public'),
     os.path.join(hl2sdk_path, 'public/engine'),
     os.path.join(hl2sdk_path, 'public/mathlib'),
@@ -71,7 +76,6 @@ library.compiler.cxxflags += [
 # =============================================================================
 # 链接设置
 # =============================================================================
-
 libdir = os.path.join(hl2sdk_path, 'lib', 'linux')
 library.compiler.linkflags += ['-lm', '-ldl', '-L' + libdir]
 
