@@ -1,5 +1,5 @@
 // ============================================================================
-// 【0】SourceMod 扩展核心 (必须第一)
+// 【0】SourceMod 扩展核心
 // ============================================================================
 #include "extension.h" 
 
@@ -21,17 +21,16 @@
 #include <ihandleentity.h> 
 
 // ============================================================================
-// 【3】SDK 兼容垫片 (关键修复：枚举必须完整定义！)
+// 【3】SDK 兼容层 (必须保留，用于修复 CS:GO SDK 缺文件的问题)
 // ============================================================================
 
-// A. 类类型：前置声明 (Forward Declaration)
-// 安全，因为我们只用指针
+// A. 类类型前置声明 (Forward Declaration)
 class CBasePlayer;
 class CBaseEntity;
 
-// B. 枚举类型：完整定义 (Dummy Definition)
-// ❌ 之前的错误原因：只写了 "enum PLAYER_ANIM;"
-// ✅ 必须写出完整的花括号内容，否则编译器不知道它占多大内存，无法按值传递
+// B. 枚举类型手动定义 (Dummy Definition)
+// 即使降级了 SourceMod SDK，CS:GO 的 HL2SDK 依然缺少 playeranimstate.h
+// 所以这个垫片必须保留，否则 imovehelper.h 无法编译
 enum PLAYER_ANIM 
 { 
     PLAYER_IDLE = 0, 
@@ -47,7 +46,6 @@ enum PLAYER_ANIM
 // ============================================================================
 #include <engine/IEngineTrace.h>
 #include <ispatialpartition.h> 
-// 此时 PLAYER_ANIM 已经有完整定义，imovehelper.h 不会再报错了
 #include <igamemovement.h> 
 #include <tier0/vprof.h>
 #include "simple_detour.h"
@@ -65,20 +63,11 @@ enum PLAYER_ANIM
 MomSurfFixExt g_MomSurfFixExt;
 
 // ----------------------------------------------------------------------------
-// 【终极方案 A】智能入口导出
+// 扩展入口点 (回归标准宏)
 // ----------------------------------------------------------------------------
-// 逻辑：如果 SDK 因为检测到 Metamod 宏而把 SMEXT_LINK 变空了，
-// 我们就自己手动导出入口函数。这能完美兼容两种情况。
-#if defined(SMEXT_CONF_METAMOD)
-    // Metamod 模式下 SMEXT_LINK 为空，我们需要手动补上 SourceMod 入口
-    extern "C" __attribute__((visibility("default"))) IMSPlugin *GetSMExtAPI()
-    {
-        return &g_MomSurfFixExt;
-    }
-#else
-    // 正常模式，使用 SDK 标准宏
-    SMEXT_LINK(&g_MomSurfFixExt);
-#endif
+// 在 SourceMod 1.11 SDK 下，只要 smsdk_config.h 配置正确，
+// 这个宏就能完美工作，不需要任何额外处理。
+SMEXT_LINK(&g_MomSurfFixExt);
 
 IEngineTrace *enginetrace = nullptr;
 typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
@@ -205,6 +194,7 @@ int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFirstTrac
 
     if (!pPlayer || !mv || !Original) return 0;
 
+    // 安全强转 void* -> IHandleEntity*
     IHandleEntity *pEntity = (IHandleEntity *)pPlayer;
 
     VPROF_BUDGET("Momentum_TryPlayerMove", VPROF_BUDGETGROUP_PLAYER);
