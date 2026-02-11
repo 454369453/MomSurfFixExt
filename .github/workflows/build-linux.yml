@@ -46,7 +46,7 @@ jobs:
       run: |
         mkdir -p sdks
         cd sdks
-        git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod
+        git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.11-dev sourcemod
         git clone --recursive https://github.com/alliedmodders/metamod-source -b 1.12-dev mmsource
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
 
