@@ -160,6 +160,7 @@ ConVar g_cvRetrace("momsurffix2_retrace", "0", 0, "Enable 27-trace retrace for s
 ConVar g_cvRetraceLen("momsurffix2_retrace_length", "0.2", 0, "Retrace offset length");
 
 ConVar *g_pSvBounce = nullptr;
+CGlobalVars *gpGlobals = nullptr;
 
 // ============================================================================
 // Accessor helpers
@@ -205,7 +206,7 @@ static int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFi
     Vector new_velocity(0,0,0), end(0,0,0), dir(0,0,0), valid_plane(0,0,0);
 
     float planes[MAX_CLIP_PLANES][3] = {};
-    float allFraction = 0.f, time_left = flTimeLeft, d;
+    float allFraction = 0.f, time_left = gpGlobals ? gpGlobals->frametime : 0.015f, d;
     int   bumpcount, blocked = 0, numplanes = 0;
     int   numbumps = g_cvRampBumpCount.GetInt();
     bool  stuck_on_ramp = false, has_valid_plane = false;
@@ -493,6 +494,8 @@ bool MomSurfFixExt2::SDK_OnLoad(char *error, size_t maxlength, bool late)
         gameconfs->CloseGameConfigFile(conf);
         return false;
     }
+
+    gpGlobals = smutils->GetCGlobals();
 
     g_pDetour = new CSimpleDetour(pTryPlayerMove, (void *)Detour_TryPlayerMove);
     UpdateDetourState();
