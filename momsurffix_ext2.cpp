@@ -496,7 +496,10 @@ bool MomSurfFixExt2::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    gpGlobals = g_SMAPI->pGlobals();
+#ifdef GetCGlobals
+#undef GetCGlobals
+#endif
+    gpGlobals = smutils->GetCGlobals();
 
     g_pDetour = new CSimpleDetour(pTryPlayerMove, (void *)Detour_TryPlayerMove);
     UpdateDetourState();
