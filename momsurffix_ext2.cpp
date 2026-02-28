@@ -35,6 +35,8 @@ MomSurfFixExt2 g_MomSurfFixExt2;
 SDKExtension *g_pExtensionIface = &g_MomSurfFixExt2;
 
 IEngineTrace *enginetrace = nullptr;
+CGlobalVars *gpGlobals = nullptr;
+extern IGameHelpers *gamehelpers;  // Defined in smsdk_ext.cpp
 
 // ============================================================================
 // Offsets
@@ -161,7 +163,6 @@ ConVar g_cvRetrace("momsurffix2_retrace", "0", 0, "Enable 27-trace retrace for s
 ConVar g_cvRetraceLen("momsurffix2_retrace_length", "0.2", 0, "Retrace offset length");
 
 ConVar *g_pSvBounce = nullptr;
-CGlobalVars *gpGlobals = nullptr;
 
 // ============================================================================
 // Accessor helpers
@@ -207,7 +208,7 @@ static int Detour_TryPlayerMove(void *pThis, Vector *pFirstDest, CGameTrace *pFi
     Vector new_velocity(0,0,0), end(0,0,0), dir(0,0,0), valid_plane(0,0,0);
 
     float planes[MAX_CLIP_PLANES][3] = {};
-    float allFraction = 0.f, time_left = gpGlobals ? gpGlobals->frametime : 0.015f, d;
+    float allFraction = 0.f, time_left = gpGlobals->interval_per_tick, d;
     int   bumpcount, blocked = 0, numplanes = 0;
     int   numbumps = g_cvRampBumpCount.GetInt();
     bool  stuck_on_ramp = false, has_valid_plane = false;
@@ -496,10 +497,7 @@ bool MomSurfFixExt2::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-#ifdef GetCGlobals
-#undef GetCGlobals
-#endif
-    gpGlobals = smutils->GetCGlobals();
+    gpGlobals = g_SMAPI->GetCGlobals();
 
     g_pDetour = new CSimpleDetour(pTryPlayerMove, (void *)Detour_TryPlayerMove);
     UpdateDetourState();
@@ -550,7 +548,17 @@ void MomSurfFixExt2::SDK_OnUnload()
     }
 }
 
-void MomSurfFixExt2::SDK_OnAllLoaded() {}
+void MomSurfFixExt2::SDK_OnAllLoaded()
+{
+    // Manually get IGameHelpers if not already set
+    if (!gamehelpers)
+    {
+        gamehelpers = (IGameHelpers *)sharesys->RequestInterface(SMINTERFACE_GAMEHELPERS_NAME,
+                                                                  SMINTERFACE_GAMEHELPERS_VERSION,
+                                                                  myself,
+                                                                  nullptr);
+    }
+}
 
 void MomSurfFixExt2::LevelInit(char const *pMapName)
 {

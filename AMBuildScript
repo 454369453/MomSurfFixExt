@@ -18,6 +18,7 @@ library.sources += [
 
 # Get path options
 hl2sdk_path = builder.options.hl2sdk_path
+mms_path = builder.options.mms_path
 
 # Include paths
 library.compiler.includes += [
@@ -36,6 +37,8 @@ library.compiler.includes += [
     os.path.join(hl2sdk_path, 'public/tier1'),
     os.path.join(hl2sdk_path, 'game/shared'),
     os.path.join(hl2sdk_path, 'common'),
+    os.path.join(mms_path, 'core'),
+    os.path.join(mms_path, 'core/sourcehook'),
 ]
 
 # Core defines
@@ -43,6 +46,7 @@ library.compiler.defines += [
     'SOURCEMOD_BUILD',
     'HAVE_STRING_H',
     'SE_EPISODEONE',
+    'SOURCE_ENGINE=SE_EPISODEONE',
     'COMPILER_GCC',
     '_LINUX',
     'LINUX',

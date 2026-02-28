@@ -42,9 +42,13 @@ jobs:
     - name: Checkout SDKs
       run: |
         mkdir -p sdks && cd sdks
-        git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.12-dev sourcemod
+        git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.11-dev sourcemod
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b css hl2sdk-css
+        git clone https://github.com/alliedmodders/metamod-source
+        cd metamod-source
+        git checkout 1.11-dev
+        cd ..
 
     - name: Build CS:GO
       env:
@@ -56,7 +60,8 @@ jobs:
           --sdks=csgo \
           --targets=x86 \
           --sm-path="${{ github.workspace }}/sdks/sourcemod" \
-          --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-csgo"
+          --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-csgo" \
+          --mms-path="${{ github.workspace }}/sdks/metamod-source"
         ambuild build_csgo
 
     - name: Build CSS
@@ -69,7 +74,8 @@ jobs:
           --sdks=css \
           --targets=x86 \
           --sm-path="${{ github.workspace }}/sdks/sourcemod" \
-          --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-css"
+          --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-css" \
+          --mms-path="${{ github.workspace }}/sdks/metamod-source"
         ambuild build_css
 
     - name: Merge packages
