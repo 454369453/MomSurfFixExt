@@ -76,13 +76,12 @@ name_vstdlib = 'vstdlib'
 if os.path.exists(os.path.join(libdir, 'libvstdlib_srv.so')):
     name_vstdlib = 'vstdlib_srv'
 
-library.compiler.postlink += [
-    os.path.join(libdir, 'tier1_i486.a'),
-    os.path.join(libdir, 'mathlib_i486.a'),
-    os.path.join(libdir, 'interfaces_i486.a'),
-    '-l' + name_tier0,
-    '-l' + name_vstdlib,
-]
+for static_lib in ['tier1_i486.a', 'mathlib_i486.a', 'interfaces_i486.a']:
+    lib_path = os.path.join(libdir, static_lib)
+    if os.path.exists(lib_path):
+        library.compiler.postlink += [lib_path]
+
+library.compiler.postlink += ['-l' + name_tier0, '-l' + name_vstdlib]
 
 class MomSurfFix:
     pass
