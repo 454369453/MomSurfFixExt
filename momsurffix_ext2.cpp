@@ -18,6 +18,7 @@
 #endif
 #include <engine/IEngineTrace.h>
 #include <ispatialpartition.h>
+#include <eiface.h>
 class CBasePlayer;
 class CBaseEntity;
 enum PLAYER_ANIM { PLAYER_IDLE=0, PLAYER_WALK, PLAYER_JUMP, PLAYER_SUPERJUMP, PLAYER_DIE, PLAYER_ATTACK1 };
@@ -495,7 +496,7 @@ bool MomSurfFixExt2::SDK_OnLoad(char *error, size_t maxlength, bool late)
         return false;
     }
 
-    gpGlobals = smutils->GetCGlobals();
+    gpGlobals = g_SMAPI->pGlobals();
 
     g_pDetour = new CSimpleDetour(pTryPlayerMove, (void *)Detour_TryPlayerMove);
     UpdateDetourState();
