@@ -3,12 +3,13 @@ name: Build MomSurfFix Extension on Linux
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
 
 jobs:
-  build-csgo:
-    name: CS:GO
+  build:
+    name: Linux
     runs-on: ubuntu-22.04
 
     steps:
@@ -42,87 +43,6 @@ jobs:
         mkdir -p sdks && cd sdks
         git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.11-dev sourcemod
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b csgo hl2sdk-csgo
-
-    - name: Overwrite smsdk_config.h
-      run: |
-        cat > smsdk_config.h <<EOF
-        #ifndef _INCLUDE_SOURCEMOD_EXTENSION_CONFIG_H_
-        #define _INCLUDE_SOURCEMOD_EXTENSION_CONFIG_H_
-        #define SMEXT_CONF_NAME         "MomSurfFix Extension"
-        #define SMEXT_CONF_DESCRIPTION  "Ports Momentum Mod surf/ramp glitch fix to CS:GO/CSS"
-        #define SMEXT_CONF_VERSION      "1.0.0"
-        #define SMEXT_CONF_AUTHOR       "GAMMACASE (original)"
-        #define SMEXT_CONF_URL          "https://github.com/454369453/MomSurfFixExt"
-        #define SMEXT_CONF_LOGTAG       "MOMSURFFIX"
-        #define SMEXT_CONF_LICENSE      "GPL"
-        #define SMEXT_CONF_DATESTRING   __DATE__
-        #define SMEXT_ENABLE_GAMECONF
-        #define SMEXT_ENABLE_MEMUTILS
-        #define SMEXT_ENABLE_GAMEHELPERS
-        #define SMEXT_ENABLE_FORWARDSYS
-        // #define SMEXT_CONF_METAMOD
-        #endif
-        EOF
-
-    - name: Configure
-      env:
-        CC: gcc-9
-        CXX: g++-9
-      run: |
-        rm -rf build
-        python3 configure.py -o build \
-          --sdks=csgo \
-          --targets=x86 \
-          --sm-path="${{ github.workspace }}/sdks/sourcemod" \
-          --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-csgo"
-        test -f build/.ambuild2/vars
-
-    - name: Build
-      env:
-        CC: gcc-9
-        CXX: g++-9
-      run: ambuild build
-
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: momsurffix_ext_csgo_linux
-        path: build/package
-
-  build-css:
-    name: CSS
-    runs-on: ubuntu-22.04
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-
-    - name: Install build dependencies
-      run: |
-        sudo dpkg --add-architecture i386
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          gcc-9 g++-9 \
-          gcc-9-multilib g++-9-multilib \
-          libc6-dev-i386 \
-          lib32stdc++6 \
-          lib32z1-dev \
-          make python3 python3-pip git ca-certificates
-        sudo ln -s /usr/include/x86_64-linux-gnu/asm /usr/include/asm || true
-
-    - name: Install AMBuild
-      run: |
-        git clone https://github.com/alliedmodders/ambuild
-        cd ambuild
-        python3 setup.py install --user
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-    - name: Checkout SDKs
-      run: |
-        mkdir -p sdks && cd sdks
-        git clone --recursive https://github.com/alliedmodders/sourcemod -b 1.11-dev sourcemod
         git clone --recursive https://github.com/alliedmodders/hl2sdk -b css hl2sdk-css
 
     - name: Overwrite smsdk_config.h
@@ -146,27 +66,51 @@ jobs:
         #endif
         EOF
 
-    - name: Configure
+    - name: Build CS:GO
       env:
         CC: gcc-9
         CXX: g++-9
       run: |
-        rm -rf build
-        python3 configure.py -o build \
+        rm -rf build_csgo
+        python3 configure.py -o build_csgo \
+          --sdks=csgo \
+          --targets=x86 \
+          --sm-path="${{ github.workspace }}/sdks/sourcemod" \
+          --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-csgo"
+        ambuild build_csgo
+
+    - name: Build CSS
+      env:
+        CC: gcc-9
+        CXX: g++-9
+      run: |
+        rm -rf build_css
+        python3 configure.py -o build_css \
           --sdks=css \
           --targets=x86 \
           --sm-path="${{ github.workspace }}/sdks/sourcemod" \
           --hl2sdk-path="${{ github.workspace }}/sdks/hl2sdk-css"
-        test -f build/.ambuild2/vars
+        ambuild build_css
 
-    - name: Build
-      env:
-        CC: gcc-9
-        CXX: g++-9
-      run: ambuild build
+    - name: Merge packages
+      run: |
+        cp build_css/package/addons/sourcemod/extensions/*.so \
+           build_csgo/package/addons/sourcemod/extensions/
+
+    - name: Zip package
+      run: |
+        cd build_csgo/package
+        zip -r ../../momsurffix_ext_linux.zip .
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: momsurffix_ext_css_linux
-        path: build/package
+        name: momsurffix_ext_linux
+        path: build_csgo/package
+
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: momsurffix_ext_linux.zip
+        generate_release_notes: true
