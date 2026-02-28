@@ -15,7 +15,11 @@
 #include <gametrace.h>
 #include <soundflags.h>
 #include <ihandleentity.h>
+#if __has_include(<interfaces/interfaces.h>)
 #include <interfaces/interfaces.h>
+#else
+#include <tier1/interface.h>
+#endif
 
 class CBasePlayer;
 class CBaseEntity;
